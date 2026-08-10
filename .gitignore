@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+fastq/*.fastq.gz
+log/
+output/
+tmp/
+.DS_Store

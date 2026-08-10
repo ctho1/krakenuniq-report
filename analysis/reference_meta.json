@@ -1,0 +1,13 @@
+{
+  "generated": "2026-08-07",
+  "n_samples_all": 1194,
+  "n_samples_min10kb": 437,
+  "size_threshold_bytes": 10240,
+  "human_excluded": true,
+  "zero_padded_absent_samples": true,
+  "pooled_reads_log_sd": 0.5455,
+  "pooled_reads_log_sd_genus": 0.6503,
+  "pooled_adj_kmers_log_sd_genus": 0.8486,
+  "pooled_kmers_log_sd_genus": 0.8727,
+  "pooled_cov_log_sd_genus": 0.9991
+}
