@@ -6,17 +6,18 @@
 #   Nanopore:  krakenuniq_pipeline.sh <reads.fastq.gz>
 #   Illumina:  krakenuniq_pipeline.sh <R1.fastq.gz> <R2.fastq.gz>
 #
-# Runs on zen4 with cores/RAM as submitted by run_pipeline.sh (sbatch flags
+# Runs on zen3 with cores/RAM as submitted by run_pipeline.sh (sbatch flags
 # there override the #SBATCH defaults below, which only apply for a direct
 # `sbatch scripts/krakenuniq_pipeline.sh ...` call).
 # --preload-size loads the DB in chunks with sufficient headroom to avoid OOM.
 # Intermediate files (read_merger.pl) are written to ./tmp.
 #
-# Alle paketinternen Pfade (dieses Skript, generate_report_v3.py, analysis/)
-# werden relativ zum Paket-Wurzelverzeichnis aufgelöst -- das Paket kann also
-# komplett an eine andere Stelle/ein anderes Konto kopiert werden. Die
-# einzigen externen, deployment-spezifischen Pfade (Referenz-DB, krakenuniq-
-# Installation) stehen in config.sh (im selben scripts/-Ordner).
+# Alle Pfade sind relativ und gehen davon aus, dass der Job im Paket-
+# Wurzelverzeichnis läuft (run_pipeline.sh ruft sbatch von dort aus auf, ohne
+# vorher das Verzeichnis zu wechseln -- SLURM setzt das Arbeitsverzeichnis des
+# Jobs standardmäßig auf dieses Submit-Verzeichnis). R1/R2 werden daher
+# ebenfalls relativ zum Paket-Root erwartet (z.B. "fastq/probe_R1_001.fastq.gz"),
+# nicht absolut.
 # =============================================================================
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=24
@@ -30,18 +31,18 @@
 
 set -euo pipefail
 
-# ── Paket-Wurzelverzeichnis + Konfiguration ──────────────────────────────────
-# Robust aus dem eigenen Skriptpfad abgeleitet (scripts/ -> eine Ebene hoch),
-# nicht aus pwd, damit das Skript unabhängig vom SLURM-Arbeitsverzeichnis
-# funktioniert (run_pipeline.sh setzt zusätzlich --chdir auf denselben Pfad).
-PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=config.sh
-source "$PACKAGE_ROOT/scripts/config.sh"
+# ── Deployment-spezifische Werte ─────────────────────────────────────────────
+# Vorher in scripts/config.sh, jetzt direkt hier. Weiterhin per Umgebungs-
+# variable überschreibbar, ohne diese Datei zu ändern, z.B.:
+#   KRAKENUNIQ_DB=/anderer/pfad bash run_pipeline.sh
+: "${KRAKENUNIQ_DB:=/scratch/tmp/thomachr/references/krakenuniq/microbial_db}"
+: "${KRAKENUNIQ_BIN_DIR:=/scratch/tmp/thomachr/software/krakenuniq}"
+: "${EXTRA_BIN_DIR:=/home/t/thomachr/bin}"
 
 export PATH="$KRAKENUNIQ_BIN_DIR:$EXTRA_BIN_DIR:$PATH"
 
 DATABASE="$KRAKENUNIQ_DB"
-REPORT_SCRIPT="$PACKAGE_ROOT/scripts/generate_report_v3.py"
+REPORT_SCRIPT="scripts/generate_report_v3.py"
 
 # ── Input & mode detection ────────────────────────────────────────────────────
 R1="$1"
@@ -58,22 +59,17 @@ fi
 
 THREADS=${SLURM_CPUS_PER_TASK:-24}
 
-PROJECT_ROOT="$PACKAGE_ROOT"
-
 echo "=== KrakenUniq Pipeline ==="
 echo "Mode        : $MODE"
 echo "Input       : $R1${R2:+ / $R2}"
 echo "Threads     : $THREADS"
 echo "Preload-size: 64G"
 echo "Database    : $DATABASE"
-echo "Project root: $PROJECT_ROOT"
 
 # ── Directories ───────────────────────────────────────────────────────────────
-mkdir -p "$PROJECT_ROOT"/log \
-         "$PROJECT_ROOT"/tmp \
-         "$PROJECT_ROOT"/output
+mkdir -p log tmp output
 
-OUT_DIR="$PROJECT_ROOT/output/${R1_BASE}"
+OUT_DIR="output/${R1_BASE}"
 mkdir -p "$OUT_DIR"
 
 REPORT_TXT="$OUT_DIR/${R1_BASE}.krakenuniq.report.txt"
@@ -82,18 +78,26 @@ REPORT_TXT="$OUT_DIR/${R1_BASE}.krakenuniq.report.txt"
 module purge
 ml palma/2024a GCC/13.3.0 Jellyfish/2.3.1 bzip2/1.0.8
 
-# cd into ./tmp so read_merger.pl intermediate files land there, not project root
-cd "$PROJECT_ROOT/tmp"
+# In ./tmp wechseln, damit read_merger.pl-Zwischendateien dort landen statt im
+# Projekt-Root. Da tmp/ eine direkte Unterebene des Paket-Roots ist, zeigen
+# die Pfade für Input/Report ab hier mit "../" zurück dorthin.
+cd tmp
+
+if [[ "$MODE" == "illumina" ]]; then
+    KRAKEN_INPUT="--paired ../$R1 ../$R2"
+else
+    KRAKEN_INPUT="../$R1"
+fi
 
 krakenuniq \
     --preload-size 64G \
-    --report-file "$REPORT_TXT" \
+    --report-file "../$REPORT_TXT" \
     --db "$DATABASE" \
     --threads "$THREADS" \
     --output - \
     $KRAKEN_INPUT
 
-cd "$PROJECT_ROOT"
+cd ..
 
 echo "KrakenUniq finished → $REPORT_TXT"
 
