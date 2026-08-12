@@ -4,12 +4,12 @@
 #
 # Automatically distinguishes Illumina (paired *_R1_001.fastq.gz / *_R2_001.fastq.gz)
 # from Nanopore (all other *.fastq.gz) and submits scripts/krakenuniq_pipeline.sh
-# as an sbatch job for each. Both modes use zen4 / 48 cores / 140G RAM.
+# as an sbatch job for each. Both modes use zen3 / 48 cores / 140G RAM.
 #
-# Alle Pfade sind relativ zu diesem Paket-Ordner -- der Ordner kann komplett
-# an eine beliebige Stelle auf PALMA kopiert werden. Nutzer-/deployment-
-# spezifische Werte (Referenz-DB, krakenuniq-Installation, Mail-Adresse)
-# stehen einzig in scripts/config.sh.
+# Verwendet ausschließlich relative Pfade und muss daher aus diesem Ordner
+# heraus aufgerufen werden (siehe Usage unten). Nutzer-/deployment-spezifische
+# Werte (Referenz-DB, krakenuniq-Installation, Mail-Adresse) stehen direkt in
+# diesem Skript bzw. in scripts/krakenuniq_pipeline.sh.
 #
 # Usage (aus diesem Ordner heraus aufrufen):
 #   bash run_pipeline.sh [--mail user@uni-muenster.de]
@@ -17,14 +17,12 @@
 
 set -euo pipefail
 
-# Paket-Wurzelverzeichnis robust aus dem eigenen Skriptpfad ableiten (nicht aus
-# pwd), damit das Paket von jedem Arbeitsverzeichnis aus gestartet werden kann.
-PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_DIR="$PACKAGE_ROOT/scripts"
-PIPELINE="$SCRIPT_DIR/krakenuniq_pipeline.sh"
+PIPELINE="scripts/krakenuniq_pipeline.sh"
 
-# shellcheck source=scripts/config.sh
-source "$SCRIPT_DIR/config.sh"
+# E-Mail für SLURM-Job-Benachrichtigungen. Standardmäßig leer (keine Mail-
+# Benachrichtigung) -- per `--mail user@uni-muenster.de` oder als
+# Umgebungsvariable setzen.
+: "${MAIL_USER:=}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -33,14 +31,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --mail-user nur an sbatch übergeben, wenn eine Adresse gesetzt ist (per
-# config.sh, Umgebungsvariable oder --mail) -- standardmäßig keine Mails.
+# --mail-user nur an sbatch übergeben, wenn eine Adresse gesetzt ist.
 MAIL_ARGS=()
 if [[ -n "$MAIL_USER" ]]; then
     MAIL_ARGS=(--mail-user="$MAIL_USER")
 fi
 
-mkdir -p "$PACKAGE_ROOT/log" "$PACKAGE_ROOT/output" "$PACKAGE_ROOT/fastq"
+mkdir -p log output fastq
 
 submitted=0
 skipped=0
@@ -63,16 +60,15 @@ while IFS= read -r -d '' R1; do
     sbatch \
         "${MAIL_ARGS[@]+"${MAIL_ARGS[@]}"}" \
         --job-name="$BASE" \
-        --partition=zen4 \
+        --partition=zen3 \
         --cpus-per-task=48 \
         --mem=140G \
         --time=1:00:00 \
-        --chdir="$PACKAGE_ROOT" \
         "$PIPELINE" "$R1" "$R2"
 
     (( submitted++ )) || true
 
-done < <(find "$PACKAGE_ROOT/fastq" -type f -name "*_R1_001.fastq.gz" -print0 | sort -z)
+done < <(find fastq -type f -name "*_R1_001*.fastq.gz" -print0 | sort -z)
 
 # ── Nanopore: single-end ──────────────────────────────────────────────────────
 echo ""
@@ -85,18 +81,17 @@ while IFS= read -r -d '' FASTQ; do
     sbatch \
         "${MAIL_ARGS[@]+"${MAIL_ARGS[@]}"}" \
         --job-name="$BASE" \
-        --partition=zen4 \
+        --partition=zen3 \
         --cpus-per-task=48 \
         --mem=140G \
         --time=1:00:00 \
-        --chdir="$PACKAGE_ROOT" \
         "$PIPELINE" "$FASTQ"
 
     (( submitted++ )) || true
 
-done < <(find "$PACKAGE_ROOT/fastq" -type f -name "*.fastq.gz" \
-         ! -name "*_R1_001.fastq.gz" \
-         ! -name "*_R2_001.fastq.gz" \
+done < <(find fastq -type f -name "*.fastq.gz" \
+         ! -name "*_R1_001*.fastq.gz" \
+         ! -name "*_R2_001*.fastq.gz" \
          -print0 | sort -z)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
