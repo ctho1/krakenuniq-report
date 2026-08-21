@@ -60,9 +60,9 @@ while IFS= read -r -d '' R1; do
     sbatch \
         "${MAIL_ARGS[@]+"${MAIL_ARGS[@]}"}" \
         --job-name="$BASE" \
-        --partition=zen3 \
-        --cpus-per-task=48 \
-        --mem=140G \
+        --partition=requeue \
+        --cpus-per-task=36 \
+        --mem=80G \
         --time=1:00:00 \
         "$PIPELINE" "$R1" "$R2"
 
@@ -81,9 +81,9 @@ while IFS= read -r -d '' FASTQ; do
     sbatch \
         "${MAIL_ARGS[@]+"${MAIL_ARGS[@]}"}" \
         --job-name="$BASE" \
-        --partition=zen3 \
-        --cpus-per-task=48 \
-        --mem=140G \
+        --partition=requeue \
+        --cpus-per-task=36 \
+        --mem=80G \
         --time=1:00:00 \
         "$PIPELINE" "$FASTQ"
 
