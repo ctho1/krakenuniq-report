@@ -33,14 +33,11 @@ palma_deploy/
 
 ## Einrichtung
 
-1. Ordner nach PALMA kopieren (z.B. `scp -r palma_deploy/ palma:~/krakenuniq_run/`
-   oder `rsync -av`).
-2. `scripts/config.sh` prüfen/anpassen (Referenz-DB-Pfad, krakenuniq-
-   Installationspfad, ggf. Mail-Adresse) – bei unverändertem Konto/Setup meist
-   nicht nötig.
-3. `pip install -r scripts/requirements.txt` (bzw. reportlab per Modul
+1. `scripts/config.sh` prüfen/anpassen (Referenz-DB-Pfad, krakenuniq-
+   Installationspfad). Bei unverändertem Konto/Setup nicht nötig.
+2. `pip install -r scripts/requirements.txt` (bzw. reportlab per Modul
    verfügbar machen).
-4. FASTQ-Dateien nach `fastq/` legen.
+3. FASTQ-Dateien nach `fastq/` kopieren.
 
 ## Ausführung
 
@@ -50,14 +47,9 @@ bash run_pipeline.sh                              # standardmäßig ohne Mail-Be
 bash run_pipeline.sh --mail user@uni-muenster.de   # Mail-Benachrichtigung aktivieren
 ```
 
-Es wird **standardmäßig keine Mail-Adresse** gesetzt (SLURM schickt dann keine
-Job-Benachrichtigungen). Adresse per `--mail`, per Umgebungsvariable
-(`MAIL_USER=... bash run_pipeline.sh`) oder dauerhaft in `scripts/config.sh`
-setzen.
-
 `run_pipeline.sh` durchsucht `fastq/`, erkennt Illumina- (`*_R1_001.fastq.gz` +
 `*_R2_001.fastq.gz`) und Nanopore-Dateien (alle übrigen `*.fastq.gz`) automatisch
-und reicht für jedes Sample einen eigenen `sbatch`-Job ein (Partition `zen4`,
+und reicht für jedes Sample einen eigenen `sbatch`-Job ein (Partition `requeue`,
 48 Cores, 140G RAM, 1h Zeitlimit). Jeder Job führt aus:
 
 1. **KrakenUniq-Klassifikation** → `output/<sample>/<sample>.krakenuniq.report.txt`
@@ -91,12 +83,3 @@ python3 scripts/build_reference_db.py \
 (Standardwerte ohne Argumente: `./reports` bzw. `./analysis`, relativ zum
 Ausführungsverzeichnis – nicht relativ zum Skript.)
 
-## Bewusst nicht enthalten
-
-Dieses Paket enthält nur, was für den laufenden Klassifikations-/Report-Betrieb
-auf PALMA nötig ist. Nicht enthalten sind die lokalen Forschungs-/Validierungs-
-Bestände des Hauptprojekts (roher Report-Korpus der 437 Referenzfälle und aller
-übrigen historischen Reports, Referenzkohorten-Rohdaten, Validierungs-/
-Analyseskripte, Manuskript-Tabellen) – diese bleiben im Hauptarbeitsverzeichnis
-und sind für den Pipeline-Betrieb nicht erforderlich (siehe oben: die daraus
-abgeleiteten `analysis/`-Dateien reichen zur Laufzeit).
