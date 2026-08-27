@@ -1,11 +1,6 @@
 # KrakenUniq-Pipeline – PALMA-Deployment
 
-Eigenständige, kopierbare Version der KrakenUniq-Klassifikations- und
-Report-Pipeline für den PALMA-HPC-Cluster (Uni Münster). Alle Pfade
-**innerhalb** dieses Ordners sind relativ – der komplette Ordner kann an eine
-beliebige Stelle (anderes Konto, anderer Pfad) kopiert werden und funktioniert
-unverändert. Die einzigen Ausnahmen (Referenzdatenbank, krakenuniq-Installation,
-Mail-Adresse) stehen zentral in [`scripts/config.sh`](scripts/config.sh).
+KrakenUniq-Klassifikations- und Report-Pipeline für mNGS-Analysen. Angepasst für den den PALMA-HPC-Cluster (Uni Münster). Alle Pfade **innerhalb** dieses Ordners sind relativ – der komplette Ordner kann an eine beliebige Stelle kopiert werden und funktioniert unverändert. Die einzigen Ausnahmen (Referenzdatenbank, krakenuniq-Installation, Mail-Adresse) stehen zentral in [`scripts/config.sh`](scripts/config.sh).
 
 ## Verzeichnisstruktur
 
