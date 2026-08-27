@@ -62,7 +62,7 @@ while IFS= read -r -d '' R1; do
         --job-name="$BASE" \
         --partition=requeue \
         --cpus-per-task=36 \
-        --mem=80G \
+        --mem=140G \
         --time=1:00:00 \
         "$PIPELINE" "$R1" "$R2"
 
@@ -83,7 +83,7 @@ while IFS= read -r -d '' FASTQ; do
         --job-name="$BASE" \
         --partition=requeue \
         --cpus-per-task=36 \
-        --mem=80G \
+        --mem=140G \
         --time=1:00:00 \
         "$PIPELINE" "$FASTQ"
 
