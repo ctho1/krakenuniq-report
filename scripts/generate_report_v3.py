@@ -1,20 +1,20 @@
 """
 KrakenUniq PDF Report Generator – v5
-Änderungen gegenüber v4:
-  - "Top-Hits"-Tabelle: feste Anzahl der priorisierten Treffer (seltenste
-    zuerst, bei Bedarf mit häufigeren aufgefüllt) füllt Seite 1 zuverlässig,
-    statt bei wenigen seltenen Treffern viel Weißraum zu lassen
-  - Vertikale Mini-Boxplots (Referenzverteilung, >=10kb-Kohorte) für k-mers
-    und Coverage je Treffer, mit rotem Punkt für den aktuellen Wert
-  - Restliche Treffer (seltene über Top-N hinaus + häufige) im kompakten
-    Supplement, getrennt nach "weitere seltene" und "häufige" Befunde
+Changes vs. v4:
+  - "Top hits" table: a fixed number of prioritised hits (rarest first,
+    topped up with more common ones if needed) reliably fills page 1
+    instead of leaving a lot of white space when there are few rare hits
+  - Mini boxplots (reference distribution, >=10kb cohort) for k-mers and
+    coverage per hit, with a red dot for the current value
+  - Remaining hits (rare ones beyond the top N + common ones) in a compact
+    supplement, split into "additional rare" and "common" findings
 
-Änderungen gegenüber v3:
-  - Schlankerer Kopfbereich (Titel/Meta/Stat-Kacheln kompakter)
-  - Automatisch generierter Befund-Fließtext entfernt
-  - Referenz-Prävalenz (n / % der Referenzdatenbank, Genus-Ebene) je Treffer
-    statt Plausibilitäts-Badge ("Detektiert" / "Auffällig" entfernt)
-  - Kommentarspalte: Pathogen / Kommensale / Kontaminant
+Changes vs. v3:
+  - Slimmer header (title/meta/stat tiles more compact)
+  - Automatically generated narrative findings text removed
+  - Reference prevalence (n / % of the reference database, genus level) per
+    hit instead of a plausibility badge ("Detected" / "Notable" removed)
+  - Comment column: Pathogen / Commensal / Contaminant
 """
 
 import csv
@@ -73,98 +73,100 @@ MT = 16*mm      # slimmer top margin (was 22mm)
 MB = 20*mm
 CW = PAGE_W - ML - MR  # ≈ 170 mm
 
-# Column widths (mm) – Top-Hits-Tabelle (Seite 1, inkl. Mini-Boxplots)
-# Rang wird als graue Unterzeile im Organismus-Feld geführt, keine eigene
-# Spalte mehr. k-mers/dup/Cov. zeigen Zahl + Boxplot gestapelt in EINER
-# Spalte (spart Breite gegenüber getrennten Wert-/Chart-Spalten).
+# Column widths (mm) – top-hits table (page 1, incl. mini boxplots)
+# The top-3 species are shown as a grey sub-line in the organism cell, not
+# as a separate column. k-mers/dup/Cov. show the number and the boxplot
+# stacked in ONE column (saves width compared to separate value/chart
+# columns).
 # Total must equal CW (170 mm)
 COL_W = {
-    "organismus": 35*mm,
-    "reads":      14*mm,
-    "kmers":      24*mm,
-    "dup":        20*mm,
-    "cov":        26*mm,
-    "referenz":   22*mm,
-    "kommentar":  29*mm,
+    "organism":  35*mm,
+    "reads":     14*mm,
+    "kmers":     24*mm,
+    "dup":       20*mm,
+    "cov":       26*mm,
+    "zscore":    22*mm,
+    "comment":   29*mm,
 }
 assert abs(sum(COL_W.values()) - CW) < 1, \
     f"Col widths sum {sum(COL_W.values())/mm:.1f}mm ≠ CW {CW/mm:.1f}mm"
-# Horizontale Boxplots: Breite = volle Zellbreite (KMERS_INNER_W/COV_INNER_W/
-# DUP_INNER_W), Höhe klein, um die Zeilenhöhe der Top-Hits-Tabelle gering zu
-# halten.
+# Horizontal boxplots: width = full cell width (KMERS_INNER_W/COV_INNER_W/
+# DUP_INNER_W), small height to keep the row height of the top-hits table
+# low.
 BOX_H = 4*mm
 KMERS_INNER_W = COL_W["kmers"] - 4*mm
 DUP_INNER_W   = COL_W["dup"]   - 4*mm
 COV_INNER_W   = COL_W["cov"] - 4*mm
 
 
-# Prävalenz-Schwellenwerte für die Tier-Struktur (bezogen auf die komplette
-# Referenzdatenbank, nicht nur die >=10kB-Kohorte)
+# Prevalence thresholds for the tier structure (relative to the complete
+# reference database, not only the >=10kB cohort)
 RARE_THRESHOLD_1PCT = 1.0
 RARE_THRESHOLD_5PCT = 5.0
 
-# z-Score-Schwellenwerte (Standardabweichungen vom log10(Reads+1)-Hinter-
-# grundrauschen des Taxons in der >=10kB-Kohorte) für die Farbmarkierung in
-# der Top-Hits-Tabelle.
+# z-score thresholds (standard deviations from the taxon's log10(reads+1)
+# background noise in the >=10kB cohort) for the colour coding in the
+# top-hits table.
 Z_THRESHOLD_HIGH = 3.0
 Z_THRESHOLD_ELEVATED = 1.5
 
-# Anzahl der priorisierten Treffer in der Top-Hits-Tabelle auf Seite 1.
-# Wird bei wenigen seltenen Treffern mit den nächst-häufigeren aufgefüllt,
-# damit Seite 1 zuverlässig gefüllt ist statt viel Weißraum zu zeigen.
+# Number of prioritised hits in the top-hits table on page 1. Topped up
+# with the next most common hits when there are only a few rare hits, so
+# that page 1 is reliably filled instead of showing a lot of white space.
 TOP_N_HITS = 15
 
-# Mindest-Reads, ab denen ein kuratierter Pathogen/Kommensalen-Treffer
-# unabhängig von seinem z-Score zwingend in die Top-Hits aufgenommen wird
-# (siehe select_top_hits()). Für "Pathogen" (etablierte ZNS-Erreger, kleine
-# kuratierte Liste) niedriger angesetzt als für "Kommensale" (humane
-# Standortflora, höhere Kontaminationswahrscheinlichkeit → mehr Evidenz
-# nötig). Seit dem Wechsel auf reine z-Score-Sortierung (ohne Genus-
-# Prävalenz-Tier als Vorsortierung) senkt dies gezielt Fälle mit sehr
-# niedrigem, aber echtem Signal ab: Referenzkohorten-Validierung zeigte
-# HIV-1 (9 Reads), BoDV-1 (5/8 Reads) und SARS-CoV-2 (5 Reads) sonst
-# außerhalb der Top-15, weil in ihren (z.T. stark polymikrobiellen) Proben
-# andere Treffer einen höheren z-Score erreichten.
-FORCED_MIN_READS = {"Pathogen": 5, "Kommensale": 20}
-# Deckel für die Anzahl forcierter Treffer, damit polymikrobiell besiedelte
-# Proben nicht die komplette Top-Hits-Tabelle mit Kommensalen füllen.
+# Minimum reads above which a curated Pathogen/Commensal hit is always
+# included in the top hits regardless of its z-score (see
+# select_top_hits()). Set lower for "Pathogen" (established CNS pathogens,
+# small curated list) than for "Commensal" (human resident flora, higher
+# probability of contamination -> more evidence required). Since switching
+# to pure z-score sorting (without the genus-prevalence tier as a pre-sort)
+# this specifically rescues cases with a very low but genuine signal: the
+# reference-cohort validation otherwise placed HIV-1 (9 reads), BoDV-1
+# (5/8 reads) and SARS-CoV-2 (5 reads) outside the top 15, because other
+# hits in their (partly highly polymicrobial) samples reached a higher
+# z-score.
+FORCED_MIN_READS = {"Pathogen": 5, "Commensal": 20}
+# Cap on the number of forced hits, so that polymicrobially colonised
+# samples do not fill the entire top-hits table with commensals.
 FORCED_MAX_N = 10
-# Mindestanzahl Plätze, die in der Top-Hits-Tabelle immer der reinen
-# Genus-Seltenheits-Priorisierung vorbehalten bleiben (nicht von forcierten
-# Treffern verdrängbar).
+# Minimum number of slots in the top-hits table that are always reserved
+# for pure genus-rarity prioritisation (cannot be displaced by forced
+# hits).
 MIN_RARITY_SLOTS = 5
 
-# Zusätzliches Aufnahmekriterium NUR für die Top-Hits-Tabelle (Seite 1),
-# auf Wunsch: eine Genus-Zeile (read-gewichteter mittlerer dup-Wert, siehe
-# group_by_genus()) mit dup >= TOP_HITS_MAX_DUP wird nicht mehr in die
-# Top-Hits aufgenommen (weder forciert noch per z-Score), erscheint aber
-# weiterhin im Supplement, sofern sie den Evidenzfilter besteht -- der
-# Evidenzfilter selbst (assess()) bleibt unverändert, ein Treffer verschwindet
-# dadurch also nicht komplett aus dem Report. Kingdom "Viren" ist davon
-# ausgenommen, aus demselben Grund wie beim dup-Cap im Evidenzfilter
-# (VIRAL_MAX_DUP): kleine virale Genome erzeugen bei echter, tiefer Coverage
-# strukturell hohe dup-Werte (z.B. BoDV-1 dup 50-400, TBEV dup 2920, JC-Virus
-# dup 215 in der Referenzkohorte) -- ein ungefiltertes dup<2 hätte praktisch
-# alle bestätigten viralen Top-Hits verdrängt.
+# Additional inclusion criterion ONLY for the top-hits table (page 1), on
+# request: a genus row (read-weighted mean dup value, see group_by_genus())
+# with dup >= TOP_HITS_MAX_DUP is no longer included in the top hits
+# (neither forced nor via z-score), but still appears in the supplement as
+# long as it passes the evidence filter -- the evidence filter itself
+# (assess()) is unchanged, so a hit does not disappear from the report
+# entirely. Kingdom "Viruses" is exempt, for the same reason as the dup cap
+# in the evidence filter (VIRAL_MAX_DUP): small viral genomes structurally
+# produce high dup values under genuine deep coverage (e.g. BoDV-1 dup
+# 50-400, TBEV dup 2920, JC virus dup 215 in the reference cohort) -- an
+# unfiltered dup<2 would have displaced practically all confirmed viral top
+# hits.
 TOP_HITS_MAX_DUP = 2.0
 
-# ── Mindestkriterien für Aufnahme in den Report (Rauschunterdrückung) ──────
+# ── Minimum criteria for inclusion in the report (noise suppression) ───────
 THRESHOLDS = {
     "CONVINCING": dict(minReads=10, minKmers=500, maxDup=5,  minCov=1e-4),
     "NOTABLE":    dict(minReads=5,  minKmers=50,  maxDup=30, minCov=1e-6),
 }
 
-# dup ("mittlere k-mer-Duplikationsrate") skaliert mit Sequenziertiefe pro
-# Genomgröße. Kleine virale Genome erzeugen bei genuine sehr hoher Coverage
-# (z.B. TBEV mit 750.000+ Reads auf einem ~11kb-Genom) strukturell sehr hohe
-# dup-Werte (>1000), ohne dass das Kontamination/Kreuzreaktivität bedeutet.
-# Referenzkohorten-Validierung (63 Fälle mit bestätigtem Erreger, Supplementary
-# Table 2): 6 von 6 viralen Fällen mit dup>30 waren echte, stark abgedeckte
-# Erreger (TBEV dup=2920, BoDV-1 dup=50-400, JCV dup=215) – der dup<=30-Cutoff
-# hätte sie trotz zehntausender Reads verworfen. Für die Kingdom "Viren" wird
-# der dup-Cutoff daher aufgehoben; bei Bakterien/Pilzen/Parasiten (deutlich
-# größere Genome) bleibt dup ein sinnvoller Kontaminations-/Kreuzreaktivitäts-
-# Indikator und wird weiter angewendet.
+# dup ("mean k-mer duplication rate") scales with sequencing depth per
+# genome size. Small viral genomes structurally produce very high dup values
+# (>1000) under genuinely very high coverage (e.g. TBEV with 750,000+ reads
+# on a ~11 kb genome) without this indicating contamination/cross-
+# reactivity. Reference-cohort validation (63 cases with a confirmed
+# pathogen, Supplementary Table 2): 6 of 6 viral cases with dup>30 were
+# genuine, highly covered pathogens (TBEV dup=2920, BoDV-1 dup=50-400, JCV
+# dup=215) -- the dup<=30 cutoff would have discarded them despite tens of
+# thousands of reads. The dup cutoff is therefore lifted for kingdom
+# "Viruses"; for bacteria/fungi/parasites (much larger genomes) dup remains
+# a meaningful contamination/cross-reactivity indicator and is still
+# applied.
 VIRAL_MAX_DUP = math.inf
 
 RELEVANT_RANKS = {
@@ -186,9 +188,9 @@ SKIP_TAXA = {
 #
 # THREE-TIER CLASSIFICATION:
 # LIKELY_CONTAMINANTS  – no human pathogen potential; pure env./reagent/skin contaminants
-# OPPORTUNISTIC_FLORA  – human commensals with opportunistic ZNS pathogen potential
+# OPPORTUNISTIC_FLORA  – human commensals with opportunistic CNS pathogen potential
 #                        (e.g. oral streptococci in brain abscess); labelled separately
-# KNOWN_PATHOGENS      – established ZNS pathogens (defined below)
+# KNOWN_PATHOGENS      – established CNS pathogens (defined below)
 
 LIKELY_CONTAMINANTS = {
     # ── Ultrapure water / reagent contaminants (Laurence et al. 2014) ─────────
@@ -245,7 +247,7 @@ LIKELY_CONTAMINANTS = {
     "Malassezia globosa",
     "Malassezia restricta CBS 7877",
     "Malassezia globosa CBS 7966",
-    # ── Food / fermentation organisms (kein humanpathogenes ZNS-Potenzial) ────
+    # ── Food / fermentation organisms (no human CNS pathogen potential) ──────
     "Streptococcus thermophilus",
     "Lactococcus cremoris",
     "Lactococcus lactis",
@@ -294,8 +296,8 @@ LIKELY_CONTAMINANTS = {
     # history before inclusion -- mixed-pathogenicity genera (e.g. Bacillus,
     # Vibrio, Burkholderia, Actinomyces, Mycobacterium, Clostridium,
     # Bordetella, Brucella, Salmonella) were deliberately NOT blanket-tagged,
-    # since group_by_genus() already lets a real Pathogen/Kommensale member
-    # species override a Kontaminant one within the same genus row.
+    # since group_by_genus() already lets a real Pathogen/Commensal member
+    # species override a Contaminant one within the same genus row.
     "Edwardsiella ictaluri",            # fish pathogen only, not human-pathogenic
     "Curtobacterium citreum",
     "Curtobacterium flaccumfaciens",
@@ -321,7 +323,7 @@ LIKELY_CONTAMINANTS = {
     "Buchnera aphidicola",
     "Candidatus Karelsulcia muelleri",
     "Candidatus Purcelliella pentastirinorum",
-    # ── Gut / oral commensal flora (no ZNS pathogen potential) ─────────────────
+    # ── Gut / oral commensal flora (no CNS pathogen potential) ─────────────────
     "Oxalobacter aliiformigenes",
     "Dolosigranulum pigrum",
     "Bifidobacterium thermophilum",
@@ -334,10 +336,10 @@ LIKELY_CONTAMINANTS = {
     "Lawsonella clevelandensis",
 }
 
-# Opportunistic flora: human commensals that can cause ZNS infections
+# Opportunistic flora: human commensals that can cause CNS infections
 # (brain abscess, meningitis in immunocompromised) but are also frequent
-# biopsy/FFPE contaminants. Labelled "Auffällig – Opportunist" to distinguish
-# from pure environmental contaminants and primary pathogens.
+# biopsy/FFPE contaminants. Labelled "Commensal" in the comment column to
+# distinguish them from pure environmental contaminants and primary pathogens.
 OPPORTUNISTIC_FLORA = {
     # ── Oral streptococci (brain abscess, endocarditis-related meningitis) ────
     "Streptococcus mitis",
@@ -362,7 +364,7 @@ OPPORTUNISTIC_FLORA = {
     # ── Oral anaerobes / mixed flora ──────────────────────────────────────────
     "Schaalia odontolytica",
     "Rothia dentocariosa",             # rare brain abscess reports
-    "Haemophilus parainfluenzae",      # rare ZNS infections
+    "Haemophilus parainfluenzae",      # rare CNS infections
     # ── Coagulase-negative staphylococci (device-related, post-neurosurgical) ─
     "Staphylococcus aureus",           # primary pathogen but also contaminant
     "Staphylococcus lugdunensis",
@@ -377,9 +379,9 @@ OPPORTUNISTIC_FLORA = {
 }
 
 KNOWN_PATHOGENS = {
-    # ZNS-relevante Primärpathogene (kuratierte Liste für Signalverstärkung)
-    # Referenz: CZ ID pathogen list (https://czid.org/pathogen_list, Chan Zuckerberg Initiative)
-    # ── Viren ─────────────────────────────────────────────────────────────────
+    # CNS-relevant primary pathogens (curated list for signal enhancement)
+    # Reference: CZ ID pathogen list (https://czid.org/pathogen_list, Chan Zuckerberg Initiative)
+    # ── Viruses ───────────────────────────────────────────────────────────────
     "Cytomegalovirus humanbeta5",   # CMV / HHV-5
     "Human betaherpesvirus 5",
     "Roseolovirus humanbeta6a",     # HHV-6A
@@ -398,29 +400,29 @@ KNOWN_PATHOGENS = {
     "Human gammaherpesvirus 4",
     "Rhadinovirus humangamma8",     # KSHV
     "Human gammaherpesvirus 8",
-    "Alphapolyomavirus quintihominis",  # JC-Virus
+    "Alphapolyomavirus quintihominis",  # JC virus
     "JC polyomavirus",
-    "Betapolyomavirus hominis",         # BK-Virus
+    "Betapolyomavirus hominis",         # BK virus
     "BK polyomavirus",
-    "Lyssavirus rabies",            # Tollwut
-    "Morbillivirus hominis",        # Masern
-    "Orthobornavirus bornaense",    # Bornavirus-Enzephalitis
-    "Borna disease virus 1",        # NCBI-Taxonomiename für BoDV-1 in KrakenUniq
-    "Human immunodeficiency virus 1",  # HIV-1 (ZNS-Beteiligung/HIV-Enzephalopathie)
-    "Orthoflavivirus nilense",      # West-Nil-Virus
+    "Lyssavirus rabies",            # rabies
+    "Morbillivirus hominis",        # measles
+    "Orthobornavirus bornaense",    # Borna virus encephalitis
+    "Borna disease virus 1",        # NCBI taxonomy name for BoDV-1 in KrakenUniq
+    "Human immunodeficiency virus 1",  # HIV-1 (CNS involvement/HIV encephalopathy)
+    "Orthoflavivirus nilense",      # West Nile virus
     "West Nile virus",
-    "Orthoflavivirus japonicum",    # Japanische Enzephalitis
-    "Orthoflavivirus encephalitidis", # FSME
+    "Orthoflavivirus japonicum",    # Japanese encephalitis
+    "Orthoflavivirus encephalitidis", # tick-borne encephalitis (TBE)
     "Tick-borne encephalitis virus",
     "Severe acute respiratory syndrome-related coronavirus",
     "Severe acute respiratory syndrome coronavirus 2",   # NCBI taxon name in KrakenUniq
     "SARS-CoV-2",
-    # ── Bakterien ────────────────────────────────────────────────────────────
+    # ── Bacteria ─────────────────────────────────────────────────────────────
     "Listeria monocytogenes",
     "Neisseria meningitidis",
     "Streptococcus pneumoniae",
     "Mycobacterium tuberculosis",
-    "Mycobacterium tuberculosis complex",  # species-group-Knoten in KrakenUniq
+    "Mycobacterium tuberculosis complex",  # species-group node in KrakenUniq
     "Treponema pallidum",
     "Borreliella burgdorferi",
     "Borrelia burgdorferi",
@@ -433,7 +435,7 @@ KNOWN_PATHOGENS = {
     "Orientia tsutsugamushi",
     "Coxiella burnetii",
     "Francisella tularensis",
-    # ── Pilze ────────────────────────────────────────────────────────────────
+    # ── Fungi ────────────────────────────────────────────────────────────────
     "Cryptococcus neoformans",
     "Cryptococcus gattii",
     "Aspergillus fumigatus",
@@ -445,7 +447,7 @@ KNOWN_PATHOGENS = {
     "Coccidioides immitis",
     "Coccidioides posadasii",
     "Pneumocystis jirovecii",
-    # ── Parasiten ────────────────────────────────────────────────────────────
+    # ── Parasites ────────────────────────────────────────────────────────────
     "Toxoplasma gondii",
     "Cryptosporidium hominis",
     "Cryptosporidium parvum",
@@ -510,9 +512,9 @@ def assess(entry):
 
     t_c = THRESHOLDS["CONVINCING"]
     t_n = THRESHOLDS["NOTABLE"]
-    # dup-Cutoff für Viren aufgehoben (siehe VIRAL_MAX_DUP-Kommentar oben).
-    max_dup_c = VIRAL_MAX_DUP if kingdom == "Viren" else t_c["maxDup"]
-    max_dup_n = VIRAL_MAX_DUP if kingdom == "Viren" else t_n["maxDup"]
+    # dup cutoff lifted for viruses (see VIRAL_MAX_DUP comment above).
+    max_dup_c = VIRAL_MAX_DUP if kingdom == "Viruses" else t_c["maxDup"]
+    max_dup_n = VIRAL_MAX_DUP if kingdom == "Viruses" else t_n["maxDup"]
 
     if (reads >= t_c["minReads"] and kmers >= t_c["minKmers"]
             and dup <= max_dup_c and cov >= t_c["minCov"]):
@@ -530,12 +532,12 @@ def assess(entry):
         level = "CONVINCING"
 
     # Pathogen bonus B: LOW → NOTABLE only with a minimum of reads, k-Mer
-    # diversity, AND an acceptable dup value. reads>=3 (statt >=5) erfasst
-    # Grenzfälle mit sehr niedriger, aber diagnostisch bestätigter Erreger-
-    # last (Referenzkohorten-Validierung: A. fumigatus mit 4 Reads/30 k-mers
-    # bei ITS-bestätigter Aspergillose). Der dup-Guard bleibt, um False
-    # Positives wie Trypanosoma (dup=234), Cryptosporidium (dup=864) zu
-    # vermeiden – für Viren gilt dabei der aufgehobene max_dup_n.
+    # diversity, AND an acceptable dup value. reads>=3 (instead of >=5)
+    # captures borderline cases with a very low but diagnostically confirmed
+    # pathogen load (reference-cohort validation: A. fumigatus with 4 reads/
+    # 30 k-mers in ITS-confirmed aspergillosis). The dup guard remains to
+    # avoid false positives such as Trypanosoma (dup=234) or Cryptosporidium
+    # (dup=864) -- for viruses the lifted max_dup_n applies.
     if (is_known_pathogen and level == "LOW"
             and reads >= 3 and kmers >= 10 and dup <= max_dup_n):
         level = "NOTABLE"
@@ -552,9 +554,9 @@ def assess(entry):
     if is_known_pathogen:
         comment = "Pathogen"
     elif is_opportunist:
-        comment = "Kommensale"
+        comment = "Commensal"
     elif is_contaminant:
-        comment = "Kontaminant"
+        comment = "Contaminant"
     else:
         comment = ""
 
@@ -571,31 +573,30 @@ def assess(entry):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Referenzdatenbank (Prävalenz über alle bisherigen KrakenUniq-Reports)
+# Reference database (prevalence across all previous KrakenUniq reports)
 # ─────────────────────────────────────────────────────────────────────────────
 _REF_DB_CACHE = None
 
 
 def load_reference_db():
     """
-    Lädt die Genus-Ebene-Prävalenz-Referenzdatenbank
-    (analysis/taxon_prevalence_genus_min10kb.csv, erzeugt von
-    scripts/build_reference_db.py). Bezieht sich bewusst auf die >=10kB-
-    Kohorte (n=437) statt der kompletten Datenbank (n=1194): dieselbe
-    Kohorte, aus der auch die Boxplot-/z-Score-Referenzverteilungen
-    (taxon_reference_stats.csv) stammen – sehr kleine/nahezu leere Reports
-    (Median-Reportgröße < 10kB) verzerren sonst die Prävalenzschätzung, ohne
-    zur Auflösung beizutragen.
+    Loads the genus-level prevalence reference database
+    (analysis/taxon_prevalence_genus_min10kb.csv, produced by
+    scripts/build_reference_db.py). Deliberately based on the >=10kB cohort
+    (n=437) rather than the complete database (n=1194): the same cohort the
+    boxplot/z-score reference distributions (taxon_reference_stats.csv) come
+    from -- very small/nearly empty reports (median report size < 10kB)
+    would otherwise bias the prevalence estimate without adding resolution.
 
-    Genus-Ebene statt Species/Strain-Ebene: eine einzelne Gattung (z.B.
-    Bradyrhizobium) kann in der Referenzdatenbank über hunderte einzelne
-    Stamm-/Isolat-Namen verteilt sein, von denen jeder für sich genommen
-    selten ist – obwohl die Gattung insgesamt ein häufiger Hintergrund-
-    kontaminant ist. Die Priorisierung im Report erfolgt daher auf
-    Genus-Ebene; angezeigt wird weiterhin der genaue Species/Strain-Name.
+    Genus level rather than species/strain level: a single genus (e.g.
+    Bradyrhizobium) can be spread across hundreds of individual strain/
+    isolate names in the reference database, each of which is rare on its
+    own -- even though the genus as a whole is a common background
+    contaminant. Prioritisation in the report is therefore done at genus
+    level; the exact species/strain name is still displayed.
 
-    Ergebnis wird pro Prozess gecached, da die Tabelle mehrere tausend
-    Zeilen hat.
+    The result is cached per process, since the table has several thousand
+    rows.
     """
     global _REF_DB_CACHE
     if _REF_DB_CACHE is not None:
@@ -630,7 +631,7 @@ def load_reference_db():
 
 
 def attach_reference(hit, ref_db, n_total):
-    """Reichert einen Treffer um Genus-Ebene-Referenz-Prävalenz (n / % von n_total) an."""
+    """Enriches a hit with its genus-level reference prevalence (n / % of n_total)."""
     n_present, pct_present = ref_db.get(hit["genus_taxid"], (0, 0.0))
     hit["ref_n"] = n_present
     hit["ref_pct"] = pct_present
@@ -638,8 +639,8 @@ def attach_reference(hit, ref_db, n_total):
     return hit
 
 
-# Gemeinsames Feld-Set für taxon_reference_stats.csv UND genus_reference_stats.csv
-# (identisches Schema, siehe build_reference_db.py: ref_stats_row()).
+# Shared field set for taxon_reference_stats.csv AND genus_reference_stats.csv
+# (identical schema, see build_reference_db.py: ref_stats_row()).
 _TAXON_STATS_FIELDS = [
     "kmers_min", "kmers_p25", "kmers_p50", "kmers_p75", "kmers_max",
     "cov_min", "cov_p25", "cov_p50", "cov_p75", "cov_max",
@@ -657,10 +658,10 @@ _POOLED_SD_CACHE = None
 
 def load_pooled_reads_log_sd():
     """
-    Lädt die gepoolte Standardabweichung von log10(Reads+1) über ALLE
-    Treffer der >=10kB-Referenzkohorte (analysis/reference_meta.json).
-    Dient als Fallback-Nenner für den z-Score, wenn ein Taxon zu selten in
-    der Referenz vorkommt (n<3), um eine eigene, stabile SD zu schätzen.
+    Loads the pooled standard deviation of log10(reads+1) across ALL hits
+    of the >=10kB reference cohort (analysis/reference_meta.json). Serves as
+    the fallback denominator for the z-score when a taxon occurs too rarely
+    in the reference (n<3) to estimate its own stable SD.
     """
     global _POOLED_SD_CACHE
     if _POOLED_SD_CACHE is not None:
@@ -682,38 +683,40 @@ def compute_z_score(value, box_stats, pooled_sd, min_n_for_own_sd=1,
                      mean_key="adj_kmers_log_mean", sd_key="adj_kmers_log_sd",
                      transform="add1"):
     """
-    z-Score: wie viele Standardabweichungen liegt dieser Treffer (log10-Skala)
-    über dem typischen Hintergrundrauschen für dieses Taxon in der
-    >=10kB-Referenzkohorte?
+    z-score: how many standard deviations (log10 scale) is this hit above
+    the typical background noise for this taxon in the >=10kB reference
+    cohort?
 
-    Standardmäßig (transform="add1", value = coverage-adjustierte k-mer-Zahl,
-    siehe kraken_tree.adjusted_kmers()): k-mers trennen echte Erreger von
-    Hintergrundrauschen besser als rohe Reads (siehe
-    analysis/threshold_analysis_report.md, AUC 0.873 vs. 0.755), und die
-    Adjustierung durch dup gewichtet breite, glaubwürdige Genom-Coverage
-    (viele verschiedene Positionen je einmal getroffen) höher als eine
-    schmale, stark duplizierte Signatur (wenige Positionen, oft getroffen)
-    -- außer bei Viren, wo hohe dup-Werte durch echte tiefe Coverage kleiner
-    Genome entstehen und daher nicht abgewertet werden. log10(value+1), da
-    value als Zähldaten (k-mers, Reads) auch 0 sein kann.
+    By default (transform="add1", value = coverage-adjusted k-mer count, see
+    kraken_tree.adjusted_kmers()): k-mers separate true pathogens from
+    background noise better than raw reads (see
+    analysis/threshold_analysis_report.md, AUC 0.873 vs. 0.755), and the
+    dup adjustment weights broad, credible genome coverage (many distinct
+    positions hit once each) higher than a narrow, highly duplicated
+    signature (few positions, hit often) -- except for viruses, where high
+    dup values arise from genuine deep coverage of small genomes and are
+    therefore not penalised. log10(value+1), because value as count data
+    (k-mers, reads) can be 0.
 
-    transform="direct": für Größen, die immer winzige Brüche sind (Coverage-
-    Anteil) -- log10(value+1) würde für jeden Wert auf ~0 kollabieren und das
-    Signal zerstören, daher wird das unverschobene log10(max(value,1e-9))
-    verwendet (identisch zur Referenzverteilung, siehe build_reference_db.py
-    log_mean_sd_direct()).
+    transform="direct": for quantities that are always tiny fractions
+    (coverage fraction) -- log10(value+1) would collapse to ~0 for every
+    value and destroy the signal, so the unshifted log10(max(value,1e-9)) is
+    used instead (identical to the reference distribution, see
+    build_reference_db.py log_mean_sd_direct()).
 
-    Referenz-Mittelwert/SD (box_stats[mean_key]/[sd_key], siehe
-    build_reference_db.py: ref_stats_row()) werden über die GESAMTE
-    >=10kB-Kohorte berechnet, nicht nur über die Fälle mit Nachweis -- Proben
-    ohne Nachweis fließen explizit mit 0 ein. Dadurch ist die taxon-eigene
-    SD bereits ab einem einzigen Referenz-Vorkommen gut konditioniert (bei
-    seltenen Taxa von den vielen "Abwesenheits"-Nullen dominiert), weshalb
-    hier standardmäßig ab n_ref>=1 die eigene SD verwendet wird:
+    The reference mean/SD (box_stats[mean_key]/[sd_key], see
+    build_reference_db.py: ref_stats_row()) are computed over the ENTIRE
+    >=10kB cohort, not only over the cases with a detection -- samples
+    without a detection explicitly enter with 0. As a result, the
+    taxon-specific SD is already well conditioned from a single reference
+    occurrence onwards (for rare taxa it is dominated by the many "absence"
+    zeros), which is why the taxon's own SD is used by default from
+    n_ref>=1:
 
-      - Taxon mit >=1 Referenz-Vorkommen UND SD>0: eigener Mittelwert/eigene SD.
-      - Taxon noch nie in der Referenz gesehen (n=0): Hintergrund wird als
-        "Stille" angenommen (mean=0), gepoolte SD (über alle Taxa) als Nenner.
+      - Taxon with >=1 reference occurrence AND SD>0: own mean/own SD.
+      - Taxon never seen in the reference (n=0): background is assumed to
+        be "silence" (mean=0), with the pooled SD (across all taxa) as the
+        denominator.
     """
     log_val = math.log10(value + 1) if transform == "add1" else math.log10(max(value, 1e-9))
     if pooled_sd <= 0:
@@ -735,11 +738,11 @@ _GENUS_STATS_CACHE = None
 
 def load_genus_stats():
     """
-    Lädt die Genus-Ebene-Verteilungskennzahlen (analysis/genus_reference_stats.csv,
-    >=10kB-Kohorte): pro Sample über alle Species/Strains einer Gattung
-    summierte Reads/k-mers (Coverage als Max, dup Read-gewichtet), dann über
-    die Kohorte aggregiert. Grundlage für die Genus-Ebene-Boxplots/z-Scores
-    im Report (siehe group_by_genus()).
+    Loads the genus-level distribution statistics
+    (analysis/genus_reference_stats.csv, >=10kB cohort): reads/k-mers summed
+    per sample over all species/strains of a genus (coverage as max, dup
+    read-weighted), then aggregated across the cohort. Basis for the
+    genus-level boxplots/z-scores in the report (see group_by_genus()).
     """
     global _GENUS_STATS_CACHE
     if _GENUS_STATS_CACHE is not None:
@@ -766,10 +769,10 @@ _POOLED_SD_META_CACHE = {}
 
 def _load_pooled_sd_genus(meta_key):
     """
-    Gepoolte SD (log-Skala) einer Genus-Ebene-Metrik über die >=10kB-
-    Referenzkohorte (analysis/reference_meta.json) -- Fallback-Nenner für
-    compute_z_score(), wenn eine Gattung zu selten in der Referenz vorkommt,
-    um eine eigene, stabile SD zu schätzen.
+    Pooled SD (log scale) of a genus-level metric across the >=10kB
+    reference cohort (analysis/reference_meta.json) -- fallback denominator
+    for compute_z_score() when a genus occurs too rarely in the reference to
+    estimate its own stable SD.
     """
     if meta_key in _POOLED_SD_META_CACHE:
         return _POOLED_SD_META_CACHE[meta_key]
@@ -800,29 +803,30 @@ def load_pooled_cov_log_sd_genus():
 
 def group_by_genus(hits):
     """
-    Aggregiert Species/Strain-Ebene-Treffer (bereits durch assess() gefiltert)
-    zu einer Zeile je Gattung:
-      - reads_display / kmers: Summe über alle Species/Strains der Gattung
-        in diesem Report
-      - cov: Maximum (Coverage ist genomgrößenabhängig und daher nicht
-        sinnvoll summierbar; der Max-Wert zeigt die stärkste Einzelevidenz)
-      - dup: Read-gewichteter Mittelwert
-      - adj_kmers: Summe der coverage-adjustierten k-mer-Zahlen der
-        Mitglieder (kraken_tree.adjusted_kmers(), je Mitglied mit dessen
-        eigenem dup-Wert berechnet, dann summiert) -- Basis des z-Scores,
-        siehe attach_genus_stats()/compute_z_score()
-      - comment: höchste Priorität unter den Mitgliedern
-        (Pathogen > Kommensale > Kontaminant > "")
-      - top3: die 3 Species/Strains mit den meisten k-mers (für die
-        Organismus-Unterzeile im Report)
-    z-Score/Boxplot-Referenzdaten (box_stats, z_score) werden hier NICHT
-    gesetzt – dafür attach_genus_stats() nach dem Gruppieren aufrufen.
+    Aggregates species/strain-level hits (already filtered by assess())
+    into one row per genus:
+      - reads_display / kmers: sum over all species/strains of the genus in
+        this report
+      - cov: maximum (coverage depends on genome size and therefore cannot
+        be meaningfully summed; the max value shows the strongest single
+        piece of evidence)
+      - dup: read-weighted mean
+      - adj_kmers: sum of the members' coverage-adjusted k-mer counts
+        (kraken_tree.adjusted_kmers(), computed per member with its own dup
+        value, then summed) -- basis of the z-score, see
+        attach_genus_stats()/compute_z_score()
+      - comment: highest priority among the members
+        (Pathogen > Commensal > Contaminant > "")
+      - top3: the 3 species/strains with the most k-mers (for the organism
+        sub-line in the report)
+    z-score/boxplot reference data (box_stats, z_score) are NOT set here --
+    call attach_genus_stats() after grouping for that.
     """
     groups = defaultdict(list)
     for h in hits:
         groups[h["genus_taxid"]].append(h)
 
-    comment_priority = {"Pathogen": 0, "Kommensale": 1, "Kontaminant": 2, "": 3}
+    comment_priority = {"Pathogen": 0, "Commensal": 1, "Contaminant": 2, "": 3}
 
     genus_rows = []
     for genus_taxid, members in groups.items():
@@ -857,13 +861,13 @@ def group_by_genus(hits):
 
 def attach_genus_stats(genus_row, genus_stats, pooled_sd_genus):
     """
-    Setzt z_score (Haupt-Score, coverage-adjustierte k-mers, siehe
-    compute_z_score()) sowie die separaten kmers_z_score/cov_z_score --
-    dieselbe Methodik, aber auf den rohen k-mers bzw. der Coverage dieser
-    Gattung, unter dem jeweiligen Boxplot in der Top-Hits-Tabelle angezeigt
-    (make_hit_table()), damit sichtbar wird, wie stark k-mer-Zahl und
-    Coverage EINZELN vom Hintergrund abweichen, nicht nur die kombinierte
-    dup-adjustierte Metrik.
+    Sets z_score (main score, coverage-adjusted k-mers, see
+    compute_z_score()) as well as the separate kmers_z_score/cov_z_score --
+    same methodology, but on the raw k-mers or the coverage of this genus,
+    shown below the respective boxplot in the top-hits table
+    (make_hit_table()), so that it becomes visible how strongly k-mer count
+    and coverage EACH deviate from the background, not only the combined
+    dup-adjusted metric.
     """
     genus_row["box_stats"] = genus_stats.get(genus_row["genus_taxid"])
     genus_row["z_score"] = compute_z_score(
@@ -901,9 +905,9 @@ def parse_report(text, ref_db=None, ref_total=None):
     if ref_db is None or ref_total is None:
         ref_db, ref_total = load_reference_db()
     hits = [attach_reference(h, ref_db, ref_total) for h in hits]
-    # z-Score/Boxplot-Referenzdaten werden auf Genus-Ebene benötigt (siehe
-    # group_by_genus()/attach_genus_stats() in select_top_hits()), nicht
-    # mehr je einzelnem Species/Strain-Treffer.
+    # z-score/boxplot reference data are needed at genus level (see
+    # group_by_genus()/attach_genus_stats() in select_top_hits()), no longer
+    # per individual species/strain hit.
 
     total_all = total_classified + total_unclassified
 
@@ -925,7 +929,7 @@ def parse_report(text, ref_db=None, ref_total=None):
 # PDF helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def fmt_num(n):
-    return f"{int(n):,}".replace(",", ".")
+    return f"{int(n):,}"
 
 def fmt_cov(cov):
     """Return coverage as percentage string.
@@ -944,18 +948,18 @@ def fmt_cov(cov):
     return f"{m}×10<super>{int(e)}</super>%"
 
 def fmt_dup(dup):
-    """1 Nachkommastelle, ab >= 100 gerundet auf Ganzzahl (Spaltenbreite)."""
+    """1 decimal place; from >= 100 rounded to an integer (column width)."""
     if dup >= 100:
         return f"{dup:.0f}"
     return f"{dup:.1f}"
 
 
 def comment_text_color(comment):
-    """Textfarbe der Kommentarspalte je Kategorie."""
+    """Text colour of the comment column per category."""
     return {
         "Pathogen":    C_RED_TEXT,
-        "Kommensale":  C_PURPLE_TEXT,
-        "Kontaminant": C_GREY_TEXT,
+        "Commensal":   C_PURPLE_TEXT,
+        "Contaminant": C_GREY_TEXT,
     }.get(comment, C_MID)
 
 
@@ -963,10 +967,10 @@ def comment_text_color(comment):
 
 def zscore_tier_props(z):
     """
-    Hintergrundfarbe der z-Score-Zelle in der Top-Hits-Tabelle.
-    >= Z_THRESHOLD_HIGH     -> starke Abweichung vom Hintergrundrauschen (rötlich)
-    >= Z_THRESHOLD_ELEVATED -> erhöhte Abweichung (orange)
-    sonst                   -> im Rahmen des üblichen Rauschens (neutral)
+    Background colour of the z-score cell in the top-hits table.
+    >= Z_THRESHOLD_HIGH     -> strong deviation from background noise (reddish)
+    >= Z_THRESHOLD_ELEVATED -> elevated deviation (orange)
+    otherwise               -> within the usual noise (neutral)
     """
     if z >= Z_THRESHOLD_HIGH:
         return C_RED_FILL, C_RED_TEXT
@@ -984,7 +988,7 @@ def fmt_zscore(z):
 
 
 def fmt_num_short(n):
-    """Kompakte Zahl für die Top-3-Species-Unterzeile, z.B. 8212 -> '8.2k'."""
+    """Compact number for the top-3 species sub-line, e.g. 8212 -> '8.2k'."""
     if n >= 1000:
         s = f"{n/1000:.1f}k"
         return s.replace(".0k", "k")
@@ -993,11 +997,11 @@ def fmt_num_short(n):
 
 def fmt_top3_species(genus_row):
     """
-    Formatiert die 3 k-mer-stärksten Species/Strains einer Genus-Zeile als
-    kompakte, mit '·' getrennte Liste für die Organismus-Unterzeile im
-    Report, z.B. "coli (8.2k) · albertii (540) · fergusonii (12)". Der
-    Gattungsname wird aus dem Species-Namen entfernt, falls er als Präfix
-    vorkommt (spart Platz, da die Gattung bereits in der Hauptzeile steht).
+    Formats the 3 species/strains of a genus row with the most k-mers as a
+    compact, '·'-separated list for the organism sub-line in the report,
+    e.g. "coli (8.2k) · albertii (540) · fergusonii (12)". The genus name is
+    removed from the species name if it occurs as a prefix (saves space,
+    since the genus is already shown in the main line).
     """
     genus = genus_row["name"]
     parts = []
@@ -1011,14 +1015,14 @@ def fmt_top3_species(genus_row):
     return " · ".join(parts)
 
 
-# ── Mini-Boxplots (Referenzverteilung k-mers/Coverage, log-Skala) ─────────
-C_BOX_FILL = HexColor("#E5E5EA")   # blasses Grau (Referenzverteilung)
+# ── Mini boxplots (reference distribution k-mers/coverage, log scale) ─────
+C_BOX_FILL = HexColor("#E5E5EA")   # pale grey (reference distribution)
 C_BOX_LINE = HexColor("#AEAEB2")
-C_BOX_DOT  = HexColor("#FF3B30")   # roter Punkt: aktueller Fall
+C_BOX_DOT  = HexColor("#FF3B30")   # red dot: current case
 
 
 def _log_frac(v, lo, hi):
-    """Position von v auf einer Log10-Skala zwischen lo und hi, als 0..1."""
+    """Position of v on a log10 scale between lo and hi, as 0..1."""
     eps = 1e-12
     v, lo, hi = max(v, eps), max(lo, eps), max(hi, eps)
     if hi <= lo:
@@ -1029,14 +1033,14 @@ def _log_frac(v, lo, hi):
 
 def make_boxplot(current_value, stats, prefix, width, height):
     """
-    Horizontaler Mini-Boxplot auf Log10-Skala (spart Zeilenhöhe gegenüber
-    der vertikalen Variante):
-      - graue Box: Referenz-Interquartilsbereich (p25-p75), >=10kB-Kohorte
-      - graue Linie: Referenz-Median (p50)
-      - graue Whisker: Referenz-Min/Max
-      - roter Punkt: Wert des aktuellen Falls
-    Gibt None zurück, wenn keine Referenzdaten für diesen Taxon vorliegen
-    (z.B. neu/nur außerhalb der >=10kB-Kohorte beobachtet).
+    Horizontal mini boxplot on a log10 scale (saves row height compared to
+    the vertical variant):
+      - grey box: reference interquartile range (p25-p75), >=10kB cohort
+      - grey line: reference median (p50)
+      - grey whiskers: reference min/max
+      - red dot: value of the current case
+    Returns None if no reference data exist for this taxon (e.g. new/only
+    observed outside the >=10kB cohort).
     """
     if not stats:
         return None
@@ -1098,7 +1102,7 @@ def draw_chrome(c, doc, sample_name, total_pages):
 
     c.setFillColor(C_NAVY)
     c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(ML, h - MT + 8*mm, "Metagenomics Untersuchung")
+    c.drawString(ML, h - MT + 8*mm, "Metagenomic Analysis")
 
     c.setFillColor(C_MID)
     c.setFont("Helvetica", 8)
@@ -1112,9 +1116,9 @@ def draw_chrome(c, doc, sample_name, total_pages):
     c.setFillColor(C_LIGHT)
     c.setFont("Helvetica", 7)
     c.drawString(ML, MB - 7*mm,
-                 "Institut für Neuropathologie · Universitätsklinikum Münster")
+                 "Institute of Neuropathology · University Hospital Münster")
     c.drawRightString(w - MR, MB - 7*mm,
-                      f"Seite {page_num} von {total_pages}")
+                      f"Page {page_num} of {total_pages}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1122,98 +1126,95 @@ def draw_chrome(c, doc, sample_name, total_pages):
 # ─────────────────────────────────────────────────────────────────────────────
 def priority_key(h):
     """
-    Sortierung absteigend nach z-Score (Standardabweichungen vom taxon-
-    spezifischen Hintergrundrauschen, >=10kB-Referenzkohorte).
+    Sort descending by z-score (standard deviations from the taxon-specific
+    background noise, >=10kB reference cohort).
 
-    Hinweis: eine frühere Version sortierte zusätzlich nach Genus-Prävalenz-
-    Tier (< 1% / < 5% / >= 5%) VOR dem z-Score, weil reiner z-Score in stark
-    polymikrobiell besiedelten (z.B. postmortalen) Proben dazu neigt, auch
-    harmlose Kommensalen weit oben einzusortieren (praktisch jede Spezies ist
-    dort gegenüber ihrem eigenen, niedrigen Hintergrund extrem erhöht). Die
-    Tier-Vorsortierung wurde auf Wunsch entfernt; als Absicherung gegen genau
-    dieses Szenario bleibt ausschließlich die forcierte Aufnahme kuratierter
-    Pathogene/Kommensalen in select_top_hits() bestehen (mit Vorrang für
-    "Pathogen" vor "Kommensale" bei begrenztem Budget). Bei Bedarf erneut mit
-    scripts/build_reference_cohort_summary.py gegen die 63-Fälle-Kohorte
-    validieren.
+    Note: an earlier version additionally sorted by genus-prevalence tier
+    (< 1% / < 5% / >= 5%) BEFORE the z-score, because a pure z-score tends
+    to rank even harmless commensals high in heavily polymicrobial (e.g.
+    post-mortem) samples (practically every species there is strongly
+    elevated relative to its own low background). The tier pre-sort was
+    removed on request; the only remaining safeguard against exactly this
+    scenario is the forced inclusion of curated pathogens/commensals in
+    select_top_hits() (with "Pathogen" taking precedence over "Commensal"
+    when the budget is limited). If needed, re-validate against the 63-case
+    cohort with scripts/build_reference_cohort_summary.py.
     """
     return -h["z_score"]
 
 
 def select_top_hits(hits):
     """
-    Gruppiert die Species/Strain-Ebene-Treffer eines Reports zu Genus-Zeilen
-    (group_by_genus() + attach_genus_stats(), siehe dort) und wählt daraus
-    die Top-Hits-Tabelle (Seite 1). Einzige Implementierung dieser Auswahl-
-    logik – wird sowohl vom PDF-Report (build_story) als auch von der
-    Referenzkohorten-Validierung (scripts/build_reference_cohort_summary.py)
-    verwendet, damit beide nie auseinanderlaufen.
+    Groups the species/strain-level hits of a report into genus rows
+    (group_by_genus() + attach_genus_stats(), see there) and selects the
+    top-hits table (page 1) from them. Single implementation of this
+    selection logic -- used both by the PDF report (build_story) and by the
+    reference-cohort validation (scripts/build_reference_cohort_summary.py),
+    so that the two never diverge.
 
-    Priorisierte Gesamtliste: absteigend nach z-Score (siehe priority_key()),
-    jetzt auf Genus-Ebene berechnet (Reads/k-mers über alle Species/Strains
-    der Gattung summiert). Die Top-N füllen Seite 1 zuverlässig auch dann,
-    wenn es nur wenige auffällige Treffer gibt (aufgefüllt mit den nächst-
-    höchsten z-Scores) – der Rest erscheint mit denselben Metriken/Boxplots
-    im Supplement, getrennt nach "weitere seltene" und "häufige" Befunde
-    (dort weiterhin anhand der Genus-Prävalenz-Tier, < 5% vs. >= 5%).
+    Prioritised overall list: descending by z-score (see priority_key()),
+    now computed at genus level (reads/k-mers summed over all species/
+    strains of the genus). The top N reliably fill page 1 even when there
+    are only a few notable hits (topped up with the next-highest z-scores)
+    -- the rest appear with the same metrics/boxplots in the supplement,
+    split into "additional rare" and "common" findings (there still based
+    on the genus-prevalence tier, < 5% vs. >= 5%).
 
-    Forcierte Aufnahme unabhängig vom z-Score: Genus-Zeilen mit kuratiertem
-    Pathogen/Kommensalen-Anteil (Kommentar-Spalte) und nicht-trivialem
-    Read-Support werden nie allein wegen niedrigerem z-Score ins Supplement
-    verdrängt. Referenzkohorten-Validierung (63 Fälle mit bestätigtem
-    Erreger): ohne diese Regel landeten z.B. S. aureus (43 Reads),
-    K. pneumoniae (318), A. fumigatus (133.475) trotz dominanten Signals
-    außerhalb der Top-15.
+    Forced inclusion regardless of z-score: genus rows containing a curated
+    pathogen/commensal (comment column) with non-trivial read support are
+    never pushed into the supplement solely because of a lower z-score.
+    Reference-cohort validation (63 cases with a confirmed pathogen):
+    without this rule, e.g. S. aureus (43 reads), K. pneumoniae (318) and
+    A. fumigatus (133,475) ended up outside the top 15 despite a dominant
+    signal.
 
-    Die forcierte Liste wird auf FORCED_MAX_N gedeckelt (stärkste Reads
-    zuerst): stark polymikrobiell besiedelte Proben (z.B. Autopsie-/
-    postmortale Hirnproben mit ausgedehnter bakterieller Überwucherung)
-    können 20+ Kommensal-Gattungen mit >= FORCED_MIN_READS enthalten. Ohne
-    Deckel würden diese die komplette Top-Hits-Tabelle füllen und den
-    eigentlich seltenen, diagnostisch entscheidenden Befund verdrängen.
-    Mindestens MIN_RARITY_SLOTS Plätze bleiben daher immer für die reine
-    z-Score-Priorisierung reserviert.
+    The forced list is capped at FORCED_MAX_N (strongest reads first):
+    heavily polymicrobial samples (e.g. autopsy/post-mortem brain samples
+    with extensive bacterial overgrowth) can contain 20+ commensal genera
+    with >= FORCED_MIN_READS. Without a cap they would fill the entire
+    top-hits table and displace the actually rare, diagnostically decisive
+    finding. At least MIN_RARITY_SLOTS slots are therefore always reserved
+    for pure z-score prioritisation.
 
-    Returns: (top_hits, rest_rare, rest_common) – Listen von Genus-Zeilen.
+    Returns: (top_hits, rest_rare, rest_common) -- lists of genus rows.
     """
     genus_stats = load_genus_stats()
     pooled_sd_genus = load_pooled_adj_kmers_log_sd_genus()
     rows = [attach_genus_stats(r, genus_stats, pooled_sd_genus)
             for r in group_by_genus(hits)]
 
-    # Aufnahmekriterien NUR für Top-Hits (dup-Cutoff, siehe TOP_HITS_MAX_DUP,
-    # Kingdom "Viren" ausgenommen; kuratierte Kontaminanten, siehe
-    # LIKELY_CONTAMINANTS). Treffer, die daran scheitern, bleiben im Pool
-    # für rest_rare/rest_common (Supplement) erhalten, sind aber weder
-    # forcierbar noch per z-Score in top_hits wählbar. Die Kontaminanten-
-    # Ausnahme ist bewusst hart (nicht nur ein Bonus/Malus im z-Score): seit
-    # die Referenzverteilung Abwesenheit als 0 mitzählt (s. Änderungshistorie
-    # in reference_cohort_filter_strategy.md), ist "selten in der Referenz"
-    # der Normalfall für praktisch jede Gattung, nicht spezifisch für echte
-    # Erreger – kuratierte Kontaminanten würden sonst genauso oft einen hohen
-    # z-Score erreichen wie seltene echte Funde und Seite 1 verwässern. Ein
-    # Kontaminant-Tag auf Genus-Ebene entsteht nur, wenn KEIN Mitglied dieser
-    # Gattung als Pathogen/Kommensale eingestuft ist (group_by_genus() nimmt
-    # die höchste Priorität unter den Mitgliedern), ein "verunreinigter"
-    # Fund mit einer echten Erreger-Spezies in derselben Gattung wird also
-    # nicht mit ausgeschlossen.
+    # Inclusion criteria ONLY for the top hits (dup cutoff, see
+    # TOP_HITS_MAX_DUP, kingdom "Viruses" exempt; curated contaminants, see
+    # LIKELY_CONTAMINANTS). Hits that fail them remain in the pool for
+    # rest_rare/rest_common (supplement), but can neither be forced nor
+    # selected into top_hits via z-score. The contaminant exclusion is
+    # deliberately hard (not just a bonus/penalty on the z-score): since the
+    # reference distribution counts absence as 0 (see change history in
+    # reference_cohort_filter_strategy.md), "rare in the reference" is the
+    # normal case for practically every genus, not specific to true
+    # pathogens -- curated contaminants would otherwise reach a high z-score
+    # just as often as rare genuine findings and dilute page 1. A
+    # Contaminant tag at genus level only arises if NO member of that genus
+    # is classified as Pathogen/Commensal (group_by_genus() takes the
+    # highest priority among the members), so a "contaminated" finding with
+    # a genuine pathogen species in the same genus is not excluded.
     eligible = [r for r in rows
-                if (r["kingdom"] == "Viren" or r["dup"] < TOP_HITS_MAX_DUP)
-                and r["comment"] != "Kontaminant"]
+                if (r["kingdom"] == "Viruses" or r["dup"] < TOP_HITS_MAX_DUP)
+                and r["comment"] != "Contaminant"]
 
-    # Kuratierte Pathogene erhalten innerhalb des forcierten Budgets Vorrang
-    # vor Kommensalen: in stark polymikrobiellen Proben können Kommensal-
-    # Gattungen (z.B. postmortale E. coli-Überwucherung, 13.529 Reads) den
-    # kompletten Cap allein durch rohe Read-Zahl belegen und eine echte, aber
-    # read-schwächere kuratierte Gattung (z.B. BoDV-1, 92 Reads) verdrängen.
+    # Curated pathogens take precedence over commensals within the forced
+    # budget: in heavily polymicrobial samples, commensal genera (e.g.
+    # post-mortem E. coli overgrowth, 13,529 reads) can occupy the entire
+    # cap purely through raw read count and displace a genuine but
+    # read-weaker curated genus (e.g. BoDV-1, 92 reads).
     forced_pathogens = sorted(
         [r for r in eligible if r["comment"] == "Pathogen"
          and r["reads_display"] >= FORCED_MIN_READS["Pathogen"]],
         key=lambda r: -r["reads_display"],
     )
     forced_commensals = sorted(
-        [r for r in eligible if r["comment"] == "Kommensale"
-         and r["reads_display"] >= FORCED_MIN_READS["Kommensale"]],
+        [r for r in eligible if r["comment"] == "Commensal"
+         and r["reads_display"] >= FORCED_MIN_READS["Commensal"]],
         key=lambda r: -r["reads_display"],
     )
     forced_cap = min(FORCED_MAX_N, TOP_N_HITS - MIN_RARITY_SLOTS)
@@ -1270,8 +1271,8 @@ def build_story(sample_name, date, parsed, platform_override=None):
 
     story = []
 
-    # ── TITLE (schmal) ───────────────────────────────────────────────────
-    story.append(P("Metagenomics Untersuchung", st_title))
+    # ── TITLE (slim) ─────────────────────────────────────────────────────
+    story.append(P("Metagenomic Analysis", st_title))
     story.append(P(f"{sample_name} · {date}", st_subtitle))
     story.append(HR(0.5*mm, 2*mm))
 
@@ -1281,10 +1282,10 @@ def build_story(sample_name, date, parsed, platform_override=None):
         return s if len(s) <= max_len else s[:max_len - 1] + "…"
 
     meta_cols = [
-        ("PROBE",    trunc(sample_name), 70*mm),
-        ("DATUM",    date,               26*mm),
-        ("METHODE",  platform,           42*mm),
-        ("REFERENZ", f"n = {parsed.get('ref_total', 437)} Fälle", 32*mm),
+        ("SAMPLE",    trunc(sample_name), 70*mm),
+        ("DATE",      date,               26*mm),
+        ("METHOD",    platform,           42*mm),
+        ("REFERENCE", f"n = {parsed.get('ref_total', 437)} cases", 32*mm),
     ]
     meta_cells = []
     meta_widths = []
@@ -1303,24 +1304,24 @@ def build_story(sample_name, date, parsed, platform_override=None):
     story.append(mt)
     story.append(HR(1.5*mm, 2*mm))
 
-    # ── STAT TILES (schmaler) ───────────────────────────────────────────
+    # ── STAT TILES (slimmer) ────────────────────────────────────────────
     tile_data = [
         (C_TILE_BLUE,
-         "READS GESAMT",
+         "TOTAL READS",
          fmt_num(parsed["total_all"]),
          ""),
         (C_TILE_GREEN,
-         "KLASSIFIZIERT",
+         "CLASSIFIED",
          f"{parsed['pct_classified']:.1f}%",
-         fmt_num(parsed["total_classified"]) + " Reads"),
+         fmt_num(parsed["total_classified"]) + " reads"),
         (HexColor("#30A46C"),
          "HUMAN",
          f"{parsed['pct_human']:.1f}%",
-         fmt_num(parsed["total_human"]) + " Reads"),
+         fmt_num(parsed["total_human"]) + " reads"),
         (C_TILE_GREY,
-         "UNKLASSIFIZIERT",
+         "UNCLASSIFIED",
          f"{parsed['pct_unclassified']:.1f}%",
-         fmt_num(parsed["total_unclassified"]) + " Reads"),
+         fmt_num(parsed["total_unclassified"]) + " reads"),
     ]
 
     def tile_cell(colour, label, big, sub):
@@ -1353,18 +1354,18 @@ def build_story(sample_name, date, parsed, platform_override=None):
     story.append(tile_tbl)
     story.append(HR(3*mm, 1*mm))
 
-    # ── BEFUNDTABELLEN ────────────────────────────────────────────────────
-    kingdoms = ["Viren", "Bakterien", "Pilze", "Parasiten"]
+    # ── FINDINGS TABLES ───────────────────────────────────────────────────
+    kingdoms = ["Viruses", "Bacteria", "Fungi", "Parasites"]
     cw = list(COL_W.values())
 
     top_hits, rest_rare, rest_common = select_top_hits(hits)
 
-    # Spaltenindizes in COL_W (Reihenfolge!) für SPAN/ALIGN-Regeln
+    # Column indices in COL_W (order matters!) for SPAN/ALIGN rules
     IDX = {name: i for i, name in enumerate(COL_W.keys())}
 
     def stacked_metric_cell(value_para, chart, inner_w, z_para=None):
-        """Zahl über Mini-Boxplot (über optionaler z-Score-Zeile) gestapelt,
-        als eine kompakte Zelle."""
+        """Number stacked above a mini boxplot (above an optional z-score
+        line), as one compact cell."""
         rows = [[value_para], [chart]]
         if z_para is not None:
             rows.append([z_para])
@@ -1380,7 +1381,7 @@ def build_story(sample_name, date, parsed, platform_override=None):
         return t
 
     def make_hit_table(group):
-        """Top-Hits-Tabelle: volle Metriken + Mini-Boxplots + Referenz + Kommentar."""
+        """Top-hits table: full metrics + mini boxplots + reference + comment."""
         tp = bp = 1.5
         lp = rp = 2.5
         fs = 8.0
@@ -1404,13 +1405,13 @@ def build_story(sample_name, date, parsed, platform_override=None):
                     textColor=HexColor("#AEAEB2"), alignment=TA_CENTER, leading=6.5)
 
         hdr = [
-            P("Organismus",  s_hdr),
+            P("Organism",    s_hdr),
             P("Reads",       s_hdr_r),
             P("k-mers",      s_hdr_c),
             P("dup",         s_hdr_c),
             P("Cov. (%)",    s_hdr_c),
-            P("z-Score",     s_hdr_c),
-            P("Kommentar",   s_hdr),
+            P("z-score",     s_hdr_c),
+            P("Comment",     s_hdr),
         ]
         rows = [hdr]
         for hit in group:
@@ -1427,12 +1428,12 @@ def build_story(sample_name, date, parsed, platform_override=None):
             kmers_cell = stacked_metric_cell(
                 P(str(hit["kmers"]), s_cc), kbox or P("–", s_dash), KMERS_INNER_W,
                 P(f"z {fmt_zscore(hit['kmers_z_score'])}", s_metz))
-            # dup hat keinen eigenen z-Score (siehe Legende), bekommt aber
-            # eine leere dritte Zeile in derselben Zeilenhöhe wie kmers_z/
-            # cov_z (statt None) -- sonst würde die 2-zeilige dup-Zelle
-            # innerhalb der (durch kmers/Cov. auf 3 Zeilen gesetzten)
-            # Zeilenhöhe vertikal zentriert und der Boxplot läge dadurch
-            # sichtbar tiefer als die anderen beiden Boxplots.
+            # dup has no z-score of its own (see legend), but gets an empty
+            # third line with the same line height as kmers_z/cov_z
+            # (instead of None) -- otherwise the 2-line dup cell would be
+            # vertically centred within the row height (set to 3 lines by
+            # kmers/Cov.), and its boxplot would sit visibly lower than the
+            # other two boxplots.
             dup_cell = stacked_metric_cell(
                 P(fmt_dup(hit["dup"]), s_cc), dbox or P("–", s_dash), DUP_INNER_W,
                 P("&nbsp;", s_metz))
@@ -1471,12 +1472,12 @@ def build_story(sample_name, date, parsed, platform_override=None):
             ("ALIGN",         (IDX["dup"],0),     (IDX["dup"],-1),     "CENTER"),
             ("ALIGN",         (IDX["kmers"],0),   (IDX["kmers"],-1),   "CENTER"),
             ("ALIGN",         (IDX["cov"],0),     (IDX["cov"],-1),     "CENTER"),
-            ("ALIGN",         (IDX["referenz"],0),(IDX["referenz"],-1),"CENTER"),
+            ("ALIGN",         (IDX["zscore"],0),  (IDX["zscore"],-1),  "CENTER"),
         ]
         for ri, hit in enumerate(group, start=1):
             z_fill, _ = zscore_tier_props(hit["z_score"])
             if z_fill is not None:
-                style_cmds.append(("BACKGROUND", (IDX["referenz"], ri), (IDX["referenz"], ri), z_fill))
+                style_cmds.append(("BACKGROUND", (IDX["zscore"], ri), (IDX["zscore"], ri), z_fill))
         tbl.setStyle(TableStyle(style_cmds))
         return tbl
 
@@ -1485,10 +1486,10 @@ def build_story(sample_name, date, parsed, platform_override=None):
                   leading=10, leftIndent=-6)
 
     def kingdom_grouped_tables(group_all, sort_key):
-        """Rendert group_all als eine make_hit_table() je Kingdom (Reihenfolge
-        s. `kingdoms`), mit Kingdom-Zwischenüberschrift -- gemeinsam von
-        Top-Hits und Supplement verwendet, damit beide identisch gegliedert
-        und identisch bebildert (Boxplots/z-Scores) sind."""
+        """Renders group_all as one make_hit_table() per kingdom (order see
+        `kingdoms`), with a kingdom sub-heading -- shared by top hits and
+        supplement, so that both are structured and illustrated
+        (boxplots/z-scores) identically."""
         for kingdom in kingdoms:
             kg_group = sorted(
                 [h for h in group_all if h["kingdom"] == kingdom],
@@ -1501,25 +1502,25 @@ def build_story(sample_name, date, parsed, platform_override=None):
             story.append(make_hit_table(kg_group))
             story.append(Spacer(1, 1.5*mm))
 
-    # Top-Hits: feste Anzahl (TOP_N_HITS), priorisiert nach Seltenheit, füllt
-    # Seite 1 zuverlässig statt bei wenigen seltenen Treffern viel Weißraum
-    # zu lassen. Gegliedert nach Kingdom (Viren/Bakterien/Pilze/Parasiten),
-    # innerhalb jeder Gruppe weiterhin absteigend nach z-Score.
+    # Top hits: fixed number (TOP_N_HITS), prioritised by rarity, reliably
+    # fills page 1 instead of leaving a lot of white space when there are
+    # few rare hits. Grouped by kingdom (Viruses/Bacteria/Fungi/Parasites),
+    # still descending by z-score within each group.
     if top_hits:
         story.append(HR(5*mm, 2.5*mm))
-        story.append(P("Top-Hits", st_section, spaceBefore=0))
+        story.append(P("Top Hits", st_section, spaceBefore=0))
         kingdom_grouped_tables(top_hits, priority_key)
     else:
         story.append(HR(5*mm, 2.5*mm))
         story.append(P(
-            "Keine Befunde oberhalb der Nachweisgrenze "
-            "(&ge; 5 Reads &middot; &ge; 50 distinkte k-mers).",
+            "No findings above the detection threshold "
+            "(&ge; 5 reads &middot; &ge; 50 distinct k-mers).",
             st_body))
 
-    # Supplement: alles außerhalb der Top-Hits, mit denselben Metriken/
-    # Boxplots/z-Scores wie Top-Hits, getrennt nach "weitere seltene"
-    # (< 5% Genus-Prävalenz, aber nicht mehr unter den Top-N) und "häufige"
-    # Befunde (>= 5% Genus-Prävalenz, Hintergrund).
+    # Supplement: everything outside the top hits, with the same metrics/
+    # boxplots/z-scores as the top hits, split into "additional rare"
+    # (< 5% genus prevalence, but no longer among the top N) and "common"
+    # findings (>= 5% genus prevalence, background).
     has_supplement = bool(rest_rare or rest_common)
 
     if has_supplement:
@@ -1540,159 +1541,158 @@ def build_story(sample_name, date, parsed, platform_override=None):
             kingdom_grouped_tables(group_all, sort_key)
 
         supplement_block(
-            "Supplement – Weitere seltene Befunde",
-            "Treffer mit &lt; 5% Genus-Prävalenz, die aufgrund des Platzlimits "
-            f"nicht mehr unter den Top {TOP_N_HITS} auf Seite 1 erscheinen. "
-            "Sortiert nach Prävalenz (aufsteigend), dann Reads (absteigend).",
+            "Supplement – Additional Rare Findings",
+            "Hits with &lt; 5% genus prevalence that no longer appear among "
+            f"the top {TOP_N_HITS} on page 1 due to the space limit. "
+            "Sorted by prevalence (ascending), then reads (descending).",
             rest_rare,
             priority_key,
         )
         if rest_rare and rest_common:
             story.append(HR(3*mm, 2*mm))
         supplement_block(
-            "Supplement – Häufige Befunde (Hintergrund)",
-            f"Treffer mit &ge; 5% Genus-Prävalenz in der Referenzdatenbank (n = "
-            f"{parsed.get('ref_total', 437)} Fälle) – mit hoher Wahrscheinlichkeit "
-            "Hintergrund oder Kontamination. Sortiert nach Reads (absteigend).",
+            "Supplement – Common Findings (Background)",
+            f"Hits with &ge; 5% genus prevalence in the reference database (n = "
+            f"{parsed.get('ref_total', 437)} cases) – most likely background "
+            "or contamination. Sorted by reads (descending).",
             rest_common,
             lambda h: -h["reads_display"],
         )
 
-    # ── LEGENDE ───────────────────────────────────────────────────────────
+    # ── LEGEND ────────────────────────────────────────────────────────────
     story.append(HR(5*mm, 3*mm))
-    story.append(P("Methodische Hinweise", st_section, spaceBefore=0))
+    story.append(P("Methodological Notes", st_section, spaceBefore=0))
 
     legend = [
-        ("Aufnahmekriterium",
-         "≥ 5 Reads · ≥ 50 distinkte k-mers · dup ≤ 30 · Genomabdeckung ≥ 0,0001%. "
-         "Bekannte Pathogene werden bei der Aufnahme bevorzugt bewertet. Treffer "
-         "unterhalb dieser Kriterien erscheinen nicht im Report."),
-        ("Organismus / Top-3-Species",
-         "Jede Zeile fasst ALLE Treffer einer Gattung (Genus) im Report "
-         "zusammen (Reads/k-mers summiert, s.u.). Die graue Unterzeile zeigt "
-         "die 3 Species/Strains dieser Gattung mit den meisten k-mers samt "
-         "k-mer-Zahl, z.B. \"coli (8.2k) · albertii (540)\" – der "
-         "Gattungsname wird dabei weggelassen, da er bereits in der "
-         "Hauptzeile steht."),
-        ("Top-Hits",
-         f"Die {TOP_N_HITS} Genus-Zeilen mit der höchsten Priorität erscheinen "
-         "mit voller Metrik auf Seite 1, absteigend nach z-Score sortiert. "
-         "Reicht die Anzahl auffälliger Gattungen nicht aus, wird mit den "
-         "nächst-höchsten z-Scores aufgefüllt. Gattungen mit kuratiertem "
-         "Pathogen/Kommensalen-Anteil und nicht-trivialem Read-Support werden "
-         "zusätzlich unabhängig vom z-Score forciert aufgenommen (s. z-Score "
-         "unten), damit ein starkes Signal nie allein wegen häufiger "
-         "Begleitflora im Supplement landet. Zusätzliche Aufnahmebedingung "
-         f"nur für Seite 1: dup &lt; {TOP_HITS_MAX_DUP:.0f} (read-gewichteter "
-         "Mittelwert über die Gattung) – bei Bakterien/Pilzen/Parasiten, nicht "
-         "bei Viren (dort strukturell hohe dup-Werte auch bei echter, tiefer "
-         "Coverage kleiner Genome, s. z-Score-Erklärung unten). Gattungen mit "
-         "kuratiertem Kontaminanten-Kommentar (s. Spalte \"Kommentar\") sind "
-         "unabhängig vom z-Score grundsätzlich von Seite 1 ausgeschlossen und "
-         "erscheinen ausschließlich im Supplement – seit die Referenz "
-         "Nichtvorkommen als 0 mitzählt (s. z-Score-Erklärung unten), ist "
-         "\"selten in der Referenz\" der Normalfall für praktisch jede "
-         "Gattung, nicht spezifisch für echte Erreger, sodass auch kuratierte "
-         "Kontaminanten regelmäßig hohe z-Scores erreichen können. Enthält "
-         "eine Gattung daneben auch eine als Pathogen/Kommensale eingestufte "
-         "Spezies, hat diese Vorrang und der Ausschluss greift nicht. "
-         "Gattungen, die an einem der beiden Kriterien scheitern, bestehen "
-         "weiterhin den Evidenzfilter und erscheinen im Supplement, nur eben "
-         "nicht auf Seite 1. Sowohl "
-         "Top-Hits als auch Supplement sind zusätzlich nach Kingdom "
-         "gegliedert (Viren / Bakterien / Pilze / Parasiten, jeweils mit "
-         "Zwischenüberschrift), innerhalb jeder Gruppe weiterhin absteigend "
-         "nach z-Score. Alle übrigen Gattungen erscheinen mit denselben "
-         "Metriken/Boxplots wie Top-Hits im Supplement, getrennt nach "
-         "weiteren seltenen und häufigen (Hintergrund-)Befunden."),
+        ("Inclusion criterion",
+         "≥ 5 reads · ≥ 50 distinct k-mers · dup ≤ 30 · genome coverage ≥ 0.0001%. "
+         "Known pathogens are evaluated preferentially for inclusion. Hits "
+         "below these criteria do not appear in the report."),
+        ("Organism / top-3 species",
+         "Each row summarises ALL hits of one genus in the report "
+         "(reads/k-mers summed, see below). The grey sub-line shows the 3 "
+         "species/strains of this genus with the most k-mers together with "
+         "their k-mer count, e.g. \"coli (8.2k) · albertii (540)\" – the "
+         "genus name is omitted there, since it is already shown in the "
+         "main line."),
+        ("Top hits",
+         f"The {TOP_N_HITS} genus rows with the highest priority appear "
+         "with full metrics on page 1, sorted by descending z-score. If "
+         "there are not enough notable genera, the list is topped up with "
+         "the next-highest z-scores. Genera containing a curated "
+         "pathogen/commensal with non-trivial read support are additionally "
+         "force-included regardless of their z-score (see z-score below), so "
+         "that a strong signal never ends up in the supplement merely "
+         "because of abundant accompanying flora. Additional inclusion "
+         f"condition for page 1 only: dup &lt; {TOP_HITS_MAX_DUP:.0f} "
+         "(read-weighted mean across the genus) – for bacteria/fungi/"
+         "parasites, not for viruses (structurally high dup values there "
+         "even under genuine deep coverage of small genomes, see z-score "
+         "explanation below). Genera with a curated contaminant comment (see "
+         "column \"Comment\") are always excluded from page 1 regardless of "
+         "their z-score and appear only in the supplement – since the "
+         "reference counts non-occurrence as 0 (see z-score explanation "
+         "below), \"rare in the reference\" is the normal case for "
+         "practically every genus, not specific to true pathogens, so that "
+         "curated contaminants can also regularly reach high z-scores. If a "
+         "genus also contains a species classified as pathogen/commensal, "
+         "that species takes precedence and the exclusion does not apply. "
+         "Genera that fail either of the two criteria still pass the "
+         "evidence filter and appear in the supplement, just not on page 1. "
+         "Both top hits and supplement are additionally grouped by kingdom "
+         "(Viruses / Bacteria / Fungi / Parasites, each with a sub-heading), "
+         "still descending by z-score within each group. All remaining "
+         "genera appear in the supplement with the same metrics/boxplots as "
+         "the top hits, split into additional rare and common (background) "
+         "findings."),
         ("Boxplot (k-mers / dup / Cov.)",
-         "Horizontale Referenzverteilung (blassgrau, Log-Skala) aus der >=10kB-"
-         f"Kohorte (n = {parsed.get('ref_total', 437)} Reports) auf GENUS-Ebene: pro Referenz-Report werden "
-         "Reads/k-mers aller Species/Strains derselben Gattung summiert (Cov. "
-         "als Max, dup als Read-gewichteter Mittelwert), daraus Box = "
-         "Interquartilsbereich (25.–75. Perzentil), graue Linie = Median, "
-         "Whisker = Minimum/Maximum. Roter Punkt = aggregierter Wert dieser "
-         "Gattung im aktuellen Fall. \"–\" bedeutet: keine Referenzdaten für "
-         "diese Gattung in der >=10kB-Kohorte vorhanden. Die kleine graue "
-         "Zahl unter k-mers/Cov. (\"z ...\") ist der z-Score dieser einen "
-         "Metrik für sich genommen – Standardabweichungen von log10(k-mers+1) "
-         "bzw. log10(Cov.) gegenüber dem Gattungs-Hintergrund, nach derselben "
-         "Methodik wie der z-Score in der Hauptspalte (siehe dort), aber ohne "
-         "dup-Adjustierung bzw. Kombination der Metriken. So wird sichtbar, "
-         "ob eine auffällige Gesamt-Abweichung eher aus breiter Coverage, aus "
-         "roher k-mer-Zahl oder aus beidem stammt. Der dup-Boxplot zeigt nur "
-         "die Referenzverteilung, ohne eigenen z-Score (dup fließt bereits "
-         "in den k-mers-z-Score der Hauptspalte ein, s.u.)."),
-        ("z-Score",
-         "Standardabweichungen von log10(coverage-adjustierte k-mers + 1) "
-         "gegenüber dem üblichen Hintergrundrauschen dieser Gattung in der "
-         f"Referenzdatenbank (>=10kB-Kohorte, n = {parsed.get('ref_total', 437)} Reports). "
-         "\"Coverage-adjustiert\" heißt: je Species/Strain wird die k-mer-"
-         "Zahl durch die Wurzel der Duplikationsrate (dup) geteilt, dann "
-         "über die Gattung summiert – k-mers allein trennen echte Erreger "
-         "besser von Hintergrundrauschen als Reads (Breite der Genom-"
-         "Coverage statt reiner Read-Menge), und die dup-Gewichtung wertet "
-         "eine breite, gering-duplizierte Signatur (viele verschiedene "
-         "Genompositionen je einmal getroffen) höher als eine schmale, "
-         "stark duplizierte (wenige Positionen, oft getroffen). Ausnahme: "
-         "bei Viren wird k-mers unverändert übernommen (keine dup-"
-         "Abwertung), da hohe dup-Werte dort durch echte tiefe Coverage "
-         "kleiner Genome entstehen, nicht durch Kontamination. Positive "
-         "Werte = mehr Signal als typischerweise für diese Gattung "
-         "beobachtet; z.B. z = +4,6 bedeutet 4,6 Standardabweichungen über "
-         "dem üblichen Rauschpegel. Proben, in denen die Gattung NICHT "
-         "nachgewiesen wurde, gehen dabei explizit mit dem Wert 0 in "
-         "Mittelwert und Streuung ein (nicht nur die Proben mit Nachweis) – "
-         "sonst würde bei sehr seltenen Gattungen (z.B. 4 von "
-         f"{parsed.get('ref_total', 437)} Fällen) der Mittelwert allein aus "
-         "diesen wenigen positiven Nachweisen berechnet und dadurch so hoch "
-         "angesetzt, dass ein weiterer, eigentlich seltener Fund fälschlich "
-         "unauffällig erschiene. Da praktisch jede Gattung in der Referenz "
-         "selten ist (die meisten kommen nur in einer Handvoll der "
-         f"{parsed.get('ref_total', 437)} Fälle vor), erreichen dadurch auch "
-         "viele kuratierte Kontaminanten regelmäßig einen hohen z-Score – "
-         "dieser allein ist deshalb kein verlässliches Ausschlusskriterium "
-         "mehr; kuratierte Kontaminanten werden stattdessen unabhängig vom "
-         "z-Score generell von Seite 1 ausgeschlossen (s. \"Top-Hits\" "
-         "oben). Bei Gattungen ohne jedes Referenz-Vorkommen gilt \"Stille\" "
-         "(0 in allen Referenzfällen) als Hintergrund, mit einer über alle "
-         "Gattungen gepoolten Streuung als Nenner. Rot hinterlegt: "
-         f"z &ge; {Z_THRESHOLD_HIGH:.0f} (starke Abweichung). Orange "
-         f"hinterlegt: z &ge; {Z_THRESHOLD_ELEVATED:.1f} (erhöhte Abweichung). "
-         "Bestimmt absteigend die Sortierung der Top-Hits-Tabelle."),
-        ("Referenz (kleine Zahl unter dem z-Score)",
-         f"Anzahl und Anteil der Referenzfälle (>=10kB-Kohorte, n = {parsed.get('ref_total', 437)} "
-         "Reports, H. sapiens ausgeschlossen), in denen mindestens ein "
-         "Treffer derselben Gattung auftrat. Rein informativ in den Top-Hits "
-         "(kein Sortierkriterium); bestimmt im Supplement, ob eine Gattung "
-         "als \"weitere seltene\" (< 5%) oder \"häufige\" (&ge; 5%) Befunde "
-         "einsortiert wird, dort weiterhin als eigene Spalte \"Referenz\", "
-         "rot/orange nach Genus-Prävalenz < 1% / < 5% hinterlegt."),
-        ("Kommentar",
-         "Pathogen: mindestens ein Species/Strain dieser Gattung ist ein "
-         "etablierter ZNS-Erreger (kuratierte Liste). Kommensale: mindestens "
-         "einer ist humane Standortflora mit opportunistischem ZNS-"
-         "Pathogenpotenzial – erfordert klinische Korrelation. Kontaminant: "
-         "typischer Reagenz-/Haut-/Laborkontaminant. Bei mehreren Kategorien "
-         "innerhalb derselben Gattung gilt die höchste Priorität (Pathogen > "
-         "Kommensale > Kontaminant). Ohne Eintrag: keine der drei kuratierten "
-         "Listen trifft zu."),
+         "Horizontal reference distribution (pale grey, log scale) from the "
+         f">=10kB cohort (n = {parsed.get('ref_total', 437)} reports) at GENUS level: for each reference report, "
+         "reads/k-mers of all species/strains of the same genus are summed "
+         "(Cov. as max, dup as read-weighted mean); box = interquartile "
+         "range (25th–75th percentile), grey line = median, whiskers = "
+         "minimum/maximum. Red dot = aggregated value of this genus in the "
+         "current case. \"–\" means: no reference data available for this "
+         "genus in the >=10kB cohort. The small grey number below k-mers/"
+         "Cov. (\"z ...\") is the z-score of that single metric on its own – "
+         "standard deviations of log10(k-mers+1) or log10(Cov.) relative to "
+         "the genus background, using the same methodology as the z-score in "
+         "the main column (see there), but without dup adjustment or "
+         "combination of metrics. This shows whether a notable overall "
+         "deviation stems from broad coverage, from the raw k-mer count, or "
+         "from both. The dup boxplot shows only the reference distribution, "
+         "without its own z-score (dup is already incorporated into the "
+         "k-mers z-score of the main column, see below)."),
+        ("z-score",
+         "Standard deviations of log10(coverage-adjusted k-mers + 1) "
+         "relative to the usual background noise of this genus in the "
+         f"reference database (>=10kB cohort, n = {parsed.get('ref_total', 437)} reports). "
+         "\"Coverage-adjusted\" means: for each species/strain the k-mer "
+         "count is divided by the square root of the duplication rate (dup), "
+         "then summed across the genus – k-mers alone separate true "
+         "pathogens from background noise better than reads (breadth of "
+         "genome coverage rather than sheer read count), and the dup "
+         "weighting rates a broad, low-duplication signature (many distinct "
+         "genome positions hit once each) higher than a narrow, highly "
+         "duplicated one (few positions, hit often). Exception: for viruses "
+         "the k-mer count is used unchanged (no dup penalty), since high dup "
+         "values there arise from genuine deep coverage of small genomes, "
+         "not from contamination. Positive values = more signal than "
+         "typically observed for this genus; e.g. z = +4.6 means 4.6 "
+         "standard deviations above the usual noise level. Samples in which "
+         "the genus was NOT detected explicitly enter mean and spread with "
+         "the value 0 (not only the samples with a detection) – otherwise, "
+         "for very rare genera (e.g. 4 of "
+         f"{parsed.get('ref_total', 437)} cases), the mean would be "
+         "computed from these few positive detections alone and thus set so "
+         "high that a further, actually rare finding would wrongly appear "
+         "unremarkable. Since practically every genus is rare in the "
+         "reference (most occur in only a handful of the "
+         f"{parsed.get('ref_total', 437)} cases), many curated contaminants "
+         "also regularly reach a high z-score as a result – the z-score "
+         "alone is therefore no longer a reliable exclusion criterion; "
+         "curated contaminants are instead generally excluded from page 1 "
+         "regardless of their z-score (see \"Top hits\" above). For genera "
+         "without any reference occurrence, \"silence\" (0 in all reference "
+         "cases) is taken as the background, with a spread pooled across all "
+         "genera as the denominator. Red background: "
+         f"z &ge; {Z_THRESHOLD_HIGH:.0f} (strong deviation). Orange "
+         f"background: z &ge; {Z_THRESHOLD_ELEVATED:.1f} (elevated deviation). "
+         "Determines the descending sort order of the top-hits table."),
+        ("Reference (small number below the z-score)",
+         f"Number and proportion of reference cases (>=10kB cohort, n = {parsed.get('ref_total', 437)} "
+         "reports, H. sapiens excluded) in which at least one hit of the "
+         "same genus occurred. Purely informative in the top hits (not a "
+         "sorting criterion); in the supplement it determines whether a "
+         "genus is classified as \"additional rare\" (< 5%) or \"common\" "
+         "(&ge; 5%) findings, there still as a separate column "
+         "\"Reference\", highlighted red/orange by genus prevalence "
+         "< 1% / < 5%."),
+        ("Comment",
+         "Pathogen: at least one species/strain of this genus is an "
+         "established CNS pathogen (curated list). Commensal: at least one "
+         "is human resident flora with opportunistic CNS pathogenic "
+         "potential – requires clinical correlation. Contaminant: typical "
+         "reagent/skin/laboratory contaminant. If several categories occur "
+         "within the same genus, the highest priority applies (Pathogen > "
+         "Commensal > Contaminant). No entry: none of the three curated "
+         "lists applies."),
         ("k-mers",
-         "Summe der distinkten 31-mere aller Species/Strains dieser Gattung "
-         "im Report. Hohe Diversität bei dup ≈ 1 spricht für genuine "
-         "genomische Abdeckung."),
+         "Sum of the distinct 31-mers of all species/strains of this genus "
+         "in the report. High diversity with dup ≈ 1 indicates genuine "
+         "genomic coverage."),
         ("dup",
-         "Read-gewichteter Mittelwert der k-mer-Duplikationsrate über alle "
-         "Species/Strains dieser Gattung, mit demselben horizontalen "
-         "Referenz-Boxplot wie k-mers/Cov. (s.o.). Werte >> 1 deuten auf "
-         "repetitive Matches oder Kreuzreaktivität hin – außer bei Viren, "
-         "wo hohe dup-Werte durch echte tiefe Coverage kleiner Genome "
-         "entstehen (s. z-Score-Erklärung unten)."),
+         "Read-weighted mean of the k-mer duplication rate across all "
+         "species/strains of this genus, with the same horizontal reference "
+         "boxplot as k-mers/Cov. (see above). Values >> 1 indicate "
+         "repetitive matches or cross-reactivity – except for viruses, "
+         "where high dup values arise from genuine deep coverage of small "
+         "genomes (see z-score explanation above)."),
         ("Cov. (%)",
-         "Höchster Wert unter den Species/Strains dieser Gattung: Prozentanteil "
-         "des jeweiligen Referenzgenoms, der durch gematchte k-mers abgedeckt "
-         "wird (1 Nachkommastelle). Nicht summiert, da Coverage genomgrößen-"
-         "abhängig ist und zwischen verschiedenen Species nicht additiv ist."),
+         "Highest value among the species/strains of this genus: percentage "
+         "of the respective reference genome covered by matched k-mers "
+         "(1 decimal place). Not summed, since coverage depends on genome "
+         "size and is not additive across different species."),
     ]
     for term, desc in legend:
         row = Table(
@@ -1709,31 +1709,31 @@ def build_story(sample_name, date, parsed, platform_override=None):
         ]))
         story.append(row)
 
-    # ── REFERENZEN ───────────────────────────────────────────────────────
+    # ── REFERENCES ───────────────────────────────────────────────────────
     story.append(HR(3*mm, 3*mm))
     st_ref = S("_ref", fontName="Helvetica", fontSize=7, textColor=C_LIGHT,
                leading=10, leftIndent=-6, spaceAfter=2*mm)
     story.append(P(
-        "<b>Klassifikationsmethode:</b> Breitwieser FP, Baker DN, Salzberg SL. "
+        "<b>Classification method:</b> Breitwieser FP, Baker DN, Salzberg SL. "
         "KrakenUniq: confident and fast metagenomics classification using unique "
         "k-mer counts. <i>Genome Biol.</i> 2018;19(1):198. "
         "doi:10.1186/s13059-018-1568-0. PMID: 30445993",
         st_ref))
     story.append(P(
-        "<b>Kontaminantenliste:</b> Laurence M, Hatzis C, Brash DE. "
+        "<b>Contaminant list:</b> Laurence M, Hatzis C, Brash DE. "
         "Common contaminants in next-generation sequencing that hinder discovery "
         "of low-abundance microbes. <i>PLoS One.</i> 2014;9(5):e97876. "
-        "doi:10.1371/journal.pone.0097876. PMID: 24837716 — ergänzt um "
-        "etablierte Hautflora- und Umweltkontaminanten.",
+        "doi:10.1371/journal.pone.0097876. PMID: 24837716 — supplemented with "
+        "established skin flora and environmental contaminants.",
         st_ref))
 
     story.append(P(
-        f"<b>Referenzdatenbank:</b> Institutsinterne Prävalenzdatenbank aus "
-        f"{parsed.get('ref_total', 437)} KrakenUniq-Reports (>=10kB-Kohorte "
-        "kuratierter mNGS-Kontrollfälle ohne Infektionsverdacht, z.B. Tumor-, "
-        "Referenzpathologie- und entzündliches Läsionsmaterial gemäß "
-        "mNGS-controls.xlsx; H. sapiens ausgeschlossen). Wird bei Vorliegen "
-        "neuer Kontrollfälle aktualisiert (scripts/build_reference_db.py "
+        f"<b>Reference database:</b> In-house prevalence database of "
+        f"{parsed.get('ref_total', 437)} KrakenUniq reports (>=10kB cohort "
+        "of curated mNGS control cases without suspected infection, e.g. "
+        "tumour, reference pathology and inflammatory lesion material as "
+        "listed in mNGS-controls.xlsx; H. sapiens excluded). Updated when "
+        "new control cases become available (scripts/build_reference_db.py "
         "--reports-dir control_cohort).",
         st_ref))
 
@@ -1759,11 +1759,11 @@ def generate_pdf(output_path, report_text=None, sample_name=None, date=None):
         # Demo data mirroring Barcode 40 analysis
         parsed = _demo_parsed()
         s_name = "PBK06944 · Barcode 40"
-        s_date = "10. April 2026"
+        s_date = "10 April 2026"
     else:
         parsed = parse_report(report_text)
-        s_name = sample_name or "Unbekannte Probe"
-        s_date = date or dt_date.today().strftime("%d. %B %Y").lstrip("0")
+        s_name = sample_name or "Unknown sample"
+        s_date = date or dt_date.today().strftime("%d %B %Y").lstrip("0")
 
     counter = _Counter()  # instance variable, safe for batch usage
 
@@ -1774,8 +1774,8 @@ def generate_pdf(output_path, report_text=None, sample_name=None, date=None):
             leftMargin=ML, rightMargin=MR,
             topMargin=MT + 8*mm,   # space for header chrome
             bottomMargin=MB + 8*mm,
-            title="Metagenomics Untersuchung",
-            author="Institut für Neuropathologie, UKM",
+            title="Metagenomic Analysis",
+            author="Institute of Neuropathology, University Hospital Münster",
         )
         doc.build(
             build_story(s_name, s_date, parsed),
@@ -1798,7 +1798,7 @@ def generate_pdf(output_path, report_text=None, sample_name=None, date=None):
         draw_chrome(c, doc, s_name, counter.total)
 
     _build(output_path, draw)
-    print(f"PDF erstellt: {output_path}  ({counter.total} Seite(n))")
+    print(f"PDF created: {output_path}  ({counter.total} page(s))")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1806,21 +1806,21 @@ def generate_pdf(output_path, report_text=None, sample_name=None, date=None):
 # ─────────────────────────────────────────────────────────────────────────────
 def _demo_parsed():
     """
-    Demo-Daten (Species/Strain-Ebene, wie ein echter Report sie liefert).
-    Die Genus-Gruppierung, Boxplots und z-Scores werden – wie im echten
-    Betrieb – von select_top_hits()/group_by_genus()/attach_genus_stats()
-    zur Anzeigezeit berechnet, nicht hier hartkodiert. Ohne eine echte
-    analysis/genus_reference_stats.csv-Zeile für die (frei erfundenen)
-    Demo-Genus-taxIDs fällt der z-Score auf die "Stille"-Baseline zurück
-    (mean=0, gepoolte SD) – für Demozwecke ausreichend.
+    Demo data (species/strain level, as a real report provides them).
+    Genus grouping, boxplots and z-scores are computed at display time by
+    select_top_hits()/group_by_genus()/attach_genus_stats() -- as in real
+    operation -- not hard-coded here. Without a real
+    analysis/genus_reference_stats.csv row for the (made-up) demo genus
+    taxIDs, the z-score falls back to the "silence" baseline (mean=0,
+    pooled SD) -- sufficient for demo purposes.
     """
     demo_ref_total = 437
 
     def _hit(taxid, name, genus_taxid, genus_name, kingdom, reads, kmers, dup, cov,
              is_contaminant, is_opportunist, is_pathogen, ref_n, ref_pct):
         comment = ("Pathogen" if is_pathogen else
-                   "Kommensale" if is_opportunist else
-                   "Kontaminant" if is_contaminant else "")
+                   "Commensal" if is_opportunist else
+                   "Contaminant" if is_contaminant else "")
         return dict(
             taxID=taxid, name=name, genus_taxid=genus_taxid, genus_name=genus_name,
             kingdom=kingdom, rank="species",
@@ -1841,19 +1841,19 @@ def _demo_parsed():
         "pct_human":          70.9,
         "ref_total":          demo_ref_total,
         "hits": [
-            _hit("d1", "Human betaherpesvirus 5", "dg1", "Cytomegalovirus", "Viren",
+            _hit("d1", "Human betaherpesvirus 5", "dg1", "Cytomegalovirus", "Viruses",
                  28, 2525, 1.05, 0.01108, False, False, True, ref_n=3, ref_pct=0.25),
-            _hit("d2", "Human betaherpesvirus 6B", "dg2", "Roseolovirus", "Viren",
+            _hit("d2", "Human betaherpesvirus 6B", "dg2", "Roseolovirus", "Viruses",
                  2, 4, 13.0, 3.32e-5, False, False, True, ref_n=5, ref_pct=0.42),
-            _hit("d3", "Staphylococcus epidermidis", "dg3", "Staphylococcus", "Bakterien",
+            _hit("d3", "Staphylococcus epidermidis", "dg3", "Staphylococcus", "Bacteria",
                  150, 16593, 1.04, 1.75e-3, True, False, False, ref_n=192, ref_pct=16.1),
-            _hit("d4", "Staphylococcus hominis", "dg3", "Staphylococcus", "Bakterien",
+            _hit("d4", "Staphylococcus hominis", "dg3", "Staphylococcus", "Bacteria",
                  12, 210, 1.4, 6.0e-5, True, False, False, ref_n=192, ref_pct=16.1),
-            _hit("d5", "Burkholderia cenocepacia", "dg5", "Burkholderia", "Bakterien",
+            _hit("d5", "Burkholderia cenocepacia", "dg5", "Burkholderia", "Bacteria",
                  2, 99, 1.0, 4.82e-6, False, False, False, ref_n=283, ref_pct=23.7),
-            _hit("d6", "Escherichia coli", "dg6", "Escherichia", "Bakterien",
+            _hit("d6", "Escherichia coli", "dg6", "Escherichia", "Bacteria",
                  18, 43, 1.63, 6.08e-7, False, True, False, ref_n=416, ref_pct=34.8),
-            _hit("d7", "Trichosporon asahii", "dg7", "Trichosporon", "Pilze",
+            _hit("d7", "Trichosporon asahii", "dg7", "Trichosporon", "Fungi",
                  59, 42, 1020.0, 1.78e-6, False, False, True, ref_n=9, ref_pct=0.75),
         ],
     }
@@ -1902,7 +1902,7 @@ if __name__ == "__main__":
         sample_name = os.path.basename(args.input).replace(".krakenuniq.report.txt", "")
 
     # Date fallback
-    report_date = args.date or _date.today().strftime("%d. %B %Y").lstrip("0")
+    report_date = args.date or _date.today().strftime("%d %B %Y").lstrip("0")
 
     # Read report text
     report_text = None

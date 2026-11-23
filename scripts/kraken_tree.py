@@ -1,14 +1,14 @@
 """
-Gemeinsame Parsing-Logik für KrakenUniq-Reports.
+Shared parsing logic for KrakenUniq reports.
 
-KrakenUniq-Reports sind ein eingerückter Taxonomiebaum (root -> ... ->
-genus -> species/strain/...). Die Einrückung der taxName-Spalte codiert die
-Tiefe im Baum. parse_kraken_rows() nutzt das, um jeder Zeile ihren nächsten
-Genus-Vorfahren zuzuordnen (für eine Genus-Ebene-Prävalenzfilterung, robust
-gegenüber der Vielzahl an Stamm-/Isolat-Namen innerhalb einer Gattung).
+KrakenUniq reports are an indented taxonomy tree (root -> ... ->
+genus -> species/strain/...). The indentation of the taxName column encodes
+the depth in the tree. parse_kraken_rows() uses this to assign each row its
+nearest genus ancestor (for genus-level prevalence filtering, robust
+against the large number of strain/isolate names within a genus).
 
-Wird sowohl von build_reference_db.py als auch generate_report_v3.py
-verwendet, damit die Genus-Zuordnung an beiden Stellen identisch ist.
+Used by both build_reference_db.py and generate_report_v3.py, so that the
+genus assignment is identical in both places.
 """
 
 import math
@@ -32,11 +32,11 @@ def adjusted_kmers(kmers, dup, kingdom):
     small enough that very high dup is routinely produced by genuinely
     deep, broad sequencing coverage rather than repetitive/contaminant
     cross-mapping -- the same reasoning already used to drop the dup
-    evidence-filter cap for Viren (see generate_report_v3.assess()). A
+    evidence-filter cap for viruses (see generate_report_v3.assess()). A
     sqrt (rather than linear) discount is used for the other kingdoms so a
     single very high dup value cannot collapse the score to near zero.
     """
-    if kingdom == "Viren":
+    if kingdom == "Viruses":
         return kmers
     return kmers / math.sqrt(max(dup, 1.0))
 
@@ -60,26 +60,26 @@ def infer_kingdom(name):
         "leishmania", "naegleria", "acanthamoeba", "apicomplexa",
         "kinetoplastea", "coccidia", "eimeria", "giardia", "entamoeba",
     ]
-    if any(k in n for k in virus_kw):    return "Viren"
-    if any(k in n for k in parasite_kw): return "Parasiten"
-    if any(k in n for k in fungus_kw):   return "Pilze"
-    return "Bakterien"
+    if any(k in n for k in virus_kw):    return "Viruses"
+    if any(k in n for k in parasite_kw): return "Parasites"
+    if any(k in n for k in fungus_kw):   return "Fungi"
+    return "Bacteria"
 
 
 def parse_kraken_rows(text):
     """
-    Parst den Tabellenteil eines KrakenUniq-Reports.
-    Gibt eine Liste von dicts zurück: pct, reads, taxReads, kmers, dup, cov,
+    Parses the table part of a KrakenUniq report.
+    Returns a list of dicts: pct, reads, taxReads, kmers, dup, cov,
     taxID, rank, name, indent, genus_taxid, genus_name.
 
-    genus_taxid/genus_name: taxID/Name des nächsten Vorfahren mit rank=="genus"
-    im Taxonomiebaum. Falls kein Genus-Vorfahre existiert (z.B. Viren ohne
-    Genus-Rang, oder Knoten oberhalb der Genus-Ebene), fällt es auf die
-    Zeile selbst zurück (genus_taxid = eigene taxID).
+    genus_taxid/genus_name: taxID/name of the nearest ancestor with
+    rank=="genus" in the taxonomy tree. If no genus ancestor exists (e.g.
+    viruses without a genus rank, or nodes above genus level), it falls back
+    to the row itself (genus_taxid = own taxID).
 
-    Manche Reports enthalten die komplette Tabelle versehentlich zweimal
-    (Konkatenations-Artefakt) – ab dem zweiten Auftreten der Spaltenüber-
-    schrift wird das Parsen abgebrochen.
+    Some reports accidentally contain the complete table twice
+    (concatenation artefact) -- parsing stops at the second occurrence of
+    the column header.
     """
     rows = []
     stack = []  # dicts: indent, taxID, name, rank

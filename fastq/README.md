@@ -1,10 +1,10 @@
 # fastq/
 
-FASTQ-Dateien hier ablegen (`.gz`-komprimiert). `run_pipeline.sh` erkennt den
-Sequenziertyp automatisch am Dateinamen:
+Place FASTQ files here (`.gz`-compressed). `run_pipeline.sh` detects the
+sequencing type automatically from the file name:
 
-- **Illumina** (paired-end): `*_R1_001.fastq.gz` + `*_R2_001.fastq.gz` (gleicher
-  Präfix). Nur R1-Dateien mit passender R2-Datei werden eingereicht.
-- **Nanopore** (single-end): jede andere `*.fastq.gz`-Datei.
+- **Illumina** (paired-end): `*_R1_001.fastq.gz` + `*_R2_001.fastq.gz` (same
+  prefix). Only R1 files with a matching R2 file are submitted.
+- **Nanopore** (single-end): any other `*.fastq.gz` file.
 
-Unterordner werden nicht durchsucht (keine Rekursion).
+Subdirectories are searched as well (`find` is called without a depth limit).

@@ -1,39 +1,43 @@
 #!/usr/bin/env python3
 """
-Baut die Referenz-Datenbank fuer die KrakenUniq-Filterstrategie.
+Builds the reference database for the KrakenUniq filter strategy.
 
-Liest alle KrakenUniq-Reports in ./reports ein und erzeugt:
-  1. sample_metrics.csv           - QC-Metriken je Sample (alle Samples)
-  2. taxon_prevalence_all.csv     - Taxon-Praevalenz (Species/Strain-Ebene)
-                                     ueber ALLE Samples
-  3. taxon_prevalence_min10kb.csv - wie 2., nur Samples mit Report-Groesse
+Reads all KrakenUniq reports in the reports directory (--reports-dir) and
+produces:
+  1. sample_metrics.csv           - QC metrics per sample (all samples)
+  2. taxon_prevalence_all.csv     - taxon prevalence (species/strain level)
+                                     across ALL samples
+  3. taxon_prevalence_min10kb.csv - as 2., only samples with a report size
                                      >= 10 KB
-  4. taxon_reference_stats.csv    - Verteilungskennzahlen (Perzentile) je
-                                     Taxon fuer die >=10kb-Kohorte
-  5. taxon_prevalence_genus_all.csv - Praevalenz auf GENUS-Ebene (ueber den
-                                     Taxonomiebaum aggregiert) ueber ALLE
-                                     Samples. Ein Sample zaehlt einmal pro
-                                     Genus, unabhaengig davon wie viele
-                                     Species/Strains dieser Gattung darin
-                                     vorkommen. Wird von generate_report_v3.py
-                                     fuer die Haupt-/Supplement-Priorisierung
-                                     verwendet, da Genus-Ebene robuster gegen
-                                     "Avalanchen" einzelner Referenzstaemme
-                                     ist (z.B. viele Bradyrhizobium sp. XY).
-  6. genus_reference_stats.csv     - wie taxon_reference_stats.csv, aber je
-                                     Genus statt je Species/Strain: pro Sample
-                                     werden Reads/k-mers aller Species/Strains
-                                     einer Gattung summiert (Coverage als Max,
-                                     dup Read-gewichtet), dann ueber die
-                                     >=10kb-Kohorte aggregiert. Enthaelt auch
-                                     adj_kmers_log_mean/_sd (coverage-
-                                     adjustierte k-mers, kraken_tree.
-                                     adjusted_kmers(): k-mers je Spezies durch
-                                     deren dup-Wert gedaempft, ausser bei
-                                     Viren) -- Basis des Genus-Ebene z-Scores
-                                     in generate_report_v3.py.
+  4. taxon_reference_stats.csv    - distribution statistics (percentiles)
+                                     per taxon for the >=10kb cohort
+  5. taxon_prevalence_genus_all.csv - prevalence at GENUS level (aggregated
+                                     over the taxonomy tree) across ALL
+                                     samples. A sample counts once per genus,
+                                     regardless of how many species/strains
+                                     of that genus it contains. Used by
+                                     generate_report_v3.py for main/
+                                     supplement prioritisation, since genus
+                                     level is more robust against
+                                     "avalanches" of individual reference
+                                     strains (e.g. many Bradyrhizobium sp. XY).
+     (taxon_prevalence_genus_min10kb.csv - as 5., >=10kb cohort only; this
+                                     is the file read by generate_report_v3.py)
+  6. genus_reference_stats.csv     - like taxon_reference_stats.csv, but per
+                                     genus instead of per species/strain: per
+                                     sample, reads/k-mers of all species/
+                                     strains of a genus are summed (coverage
+                                     as max, dup read-weighted), then
+                                     aggregated across the >=10kb cohort.
+                                     Also contains adj_kmers_log_mean/_sd
+                                     (coverage-adjusted k-mers, kraken_tree.
+                                     adjusted_kmers(): k-mers per species
+                                     damped by their dup value, except for
+                                     viruses) -- basis of the genus-level
+                                     z-score in generate_report_v3.py.
+  plus sample_qc_reference_percentiles.csv and reference_meta.json.
 
-Homo sapiens (taxID 9606) wird von vornherein ausgeschlossen.
+Homo sapiens (taxID 9606) is excluded from the outset.
 """
 
 import argparse
@@ -145,16 +149,18 @@ def main():
     global REPORTS_DIR, OUT_DIR
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--reports-dir", default=REPORTS_DIR,
-                     help="Verzeichnis mit *.krakenuniq.report.txt (Default: ./reports)")
+                     help="Directory containing *.krakenuniq.report.txt "
+                          "(default: reports/ next to the scripts/ folder)")
     ap.add_argument("--out-dir", default=OUT_DIR,
-                     help="Ausgabeverzeichnis fuer die CSV/JSON-Referenzdateien (Default: ./analysis)")
+                     help="Output directory for the CSV/JSON reference files "
+                          "(default: analysis/ next to the scripts/ folder)")
     args = ap.parse_args()
     REPORTS_DIR = args.reports_dir
     OUT_DIR = args.out_dir
     os.makedirs(OUT_DIR, exist_ok=True)
 
     paths = sorted(glob.glob(os.path.join(REPORTS_DIR, "*.krakenuniq.report.txt")))
-    print(f"Gefundene Reports: {len(paths)}")
+    print(f"Reports found: {len(paths)}")
 
     sample_rows = []
     # taxon_key -> {"all": [sample_records...], "big": [...]}
@@ -166,9 +172,9 @@ def main():
     genus_names = {}  # genus_taxid -> genus_name
     # genus_key -> [per-sample aggregated dict, ...] (>=10kb cohort only) -
     # basis for genus_reference_stats.csv (z-score/boxplot reference at
-    # Genus-Ebene). Ein Sample liefert genau EINEN aggregierten Datenpunkt
-    # je Genus (Reads/k-mers summiert über alle Species/Strains dieser
-    # Gattung im Sample, Coverage als Max, dup Read-gewichtet).
+    # genus level). A sample contributes exactly ONE aggregated data point
+    # per genus (reads/k-mers summed over all species/strains of that genus
+    # in the sample, coverage as max, dup read-weighted).
     genus_hits_big = defaultdict(list)
 
     n_all = 0
@@ -300,7 +306,7 @@ def main():
     write_prevalence(taxon_hits_all, n_all, "taxon_prevalence_all.csv")
     write_prevalence(taxon_hits_big, n_big, "taxon_prevalence_min10kb.csv")
 
-    # ── Genus-Ebene-Prävalenz (ein Sample zählt je Genus nur einmal) ────
+    # ── Genus-level prevalence (a sample counts only once per genus) ────
     def write_genus_prevalence(genus_samples, n_total, out_name):
         rows = []
         for genus_taxid, samples in genus_samples.items():
@@ -388,7 +394,7 @@ def main():
         # population mean pushes the majority of background/contaminant
         # hits to a high z-score too, same as it correctly does for true
         # rare pathogens -- z-score alone is no longer a reliable Top-Hits
-        # filter under this accounting, which is why Kontaminant-tagged
+        # filter under this accounting, which is why Contaminant-tagged
         # genus rows are now excluded from Top-Hits outright regardless of
         # z-score, see select_top_hits() in generate_report_v3.py).
         #
@@ -491,7 +497,7 @@ def main():
         w.writerows(ref_rows)
 
     # ── genus_reference_stats.csv (percentile distributions, >=10kb cohort,
-    # aggregiert über alle Species/Strains je Gattung und Sample) ──────────
+    # aggregated over all species/strains per genus and sample) ───────────
     genus_ref_rows = []
     for genus_taxid, records in genus_hits_big.items():
         genus_ref_rows.append(dict(
@@ -522,13 +528,13 @@ def main():
             pc = col_percentiles(big_rows, col)
             w.writerow([col, len(big_rows)] + [round(pc[p], 4) for p in (5, 10, 25, 50, 75, 90, 95)])
 
-    print(f"Samples gesamt: {n_all}")
+    print(f"Samples total: {n_all}")
     print(f"Samples >= 10 KB: {n_big}")
-    print(f"Distinkte Taxa (alle Samples): {len(taxon_hits_all)}")
-    print(f"Distinkte Taxa (>=10kb Kohorte): {len(taxon_hits_big)}")
-    print(f"Distinkte Genera (alle Samples): {len(genus_samples_all)}")
-    print(f"Distinkte Genera (>=10kb Kohorte, mit Referenzstatistik): {len(genus_hits_big)}")
-    print(f"Output-Verzeichnis: {os.path.abspath(OUT_DIR)}")
+    print(f"Distinct taxa (all samples): {len(taxon_hits_all)}")
+    print(f"Distinct taxa (>=10kb cohort): {len(taxon_hits_big)}")
+    print(f"Distinct genera (all samples): {len(genus_samples_all)}")
+    print(f"Distinct genera (>=10kb cohort, with reference stats): {len(genus_hits_big)}")
+    print(f"Output directory: {os.path.abspath(OUT_DIR)}")
 
 
 if __name__ == "__main__":

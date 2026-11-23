@@ -6,18 +6,17 @@
 #   Nanopore:  krakenuniq_pipeline.sh <reads.fastq.gz>
 #   Illumina:  krakenuniq_pipeline.sh <R1.fastq.gz> <R2.fastq.gz>
 #
-# Runs on zen3 with cores/RAM as submitted by run_pipeline.sh (sbatch flags
-# there override the #SBATCH defaults below, which only apply for a direct
-# `sbatch scripts/krakenuniq_pipeline.sh ...` call).
+# Runs with the partition/cores/RAM submitted by run_pipeline.sh (the sbatch
+# flags there override the #SBATCH defaults below, which only apply to a
+# direct `sbatch scripts/krakenuniq_pipeline.sh ...` call).
 # --preload-size loads the DB in chunks with sufficient headroom to avoid OOM.
 # Intermediate files (read_merger.pl) are written to ./tmp.
 #
-# Alle Pfade sind relativ und gehen davon aus, dass der Job im Paket-
-# Wurzelverzeichnis läuft (run_pipeline.sh ruft sbatch von dort aus auf, ohne
-# vorher das Verzeichnis zu wechseln -- SLURM setzt das Arbeitsverzeichnis des
-# Jobs standardmäßig auf dieses Submit-Verzeichnis). R1/R2 werden daher
-# ebenfalls relativ zum Paket-Root erwartet (z.B. "fastq/probe_R1_001.fastq.gz"),
-# nicht absolut.
+# All paths are relative and assume that the job runs in the package root
+# directory (run_pipeline.sh calls sbatch from there without changing the
+# directory first -- SLURM sets the job's working directory to this submit
+# directory by default). R1/R2 are therefore also expected relative to the
+# package root (e.g. "fastq/sample_R1_001.fastq.gz"), not as absolute paths.
 # =============================================================================
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=24
@@ -31,10 +30,10 @@
 
 set -euo pipefail
 
-# ── Deployment-spezifische Werte ─────────────────────────────────────────────
-# Vorher in scripts/config.sh, jetzt direkt hier. Weiterhin per Umgebungs-
-# variable überschreibbar, ohne diese Datei zu ändern, z.B.:
-#   KRAKENUNIQ_DB=/anderer/pfad bash run_pipeline.sh
+# ── Deployment-specific values ───────────────────────────────────────────────
+# The only paths that point outside this package. Can be overridden via
+# environment variables without editing this file, e.g.:
+#   KRAKENUNIQ_DB=/other/path bash run_pipeline.sh
 : "${KRAKENUNIQ_DB:=/scratch/tmp/thomachr/references/krakenuniq/microbial_db}"
 : "${KRAKENUNIQ_BIN_DIR:=/scratch/tmp/thomachr/software/krakenuniq}"
 : "${EXTRA_BIN_DIR:=/home/t/thomachr/bin}"
@@ -78,9 +77,9 @@ REPORT_TXT="$OUT_DIR/${R1_BASE}.krakenuniq.report.txt"
 module purge
 ml palma/2024a GCC/13.3.0 Jellyfish/2.3.1 bzip2/1.0.8
 
-# In ./tmp wechseln, damit read_merger.pl-Zwischendateien dort landen statt im
-# Projekt-Root. Da tmp/ eine direkte Unterebene des Paket-Roots ist, zeigen
-# die Pfade für Input/Report ab hier mit "../" zurück dorthin.
+# Change into ./tmp so that read_merger.pl intermediate files end up there
+# instead of in the project root. Since tmp/ is a direct subdirectory of the
+# package root, the input/report paths point back there with "../" from here.
 cd tmp
 
 if [[ "$MODE" == "illumina" ]]; then

@@ -4,14 +4,15 @@
 #
 # Automatically distinguishes Illumina (paired *_R1_001.fastq.gz / *_R2_001.fastq.gz)
 # from Nanopore (all other *.fastq.gz) and submits scripts/krakenuniq_pipeline.sh
-# as an sbatch job for each. Both modes use zen3 / 48 cores / 140G RAM.
+# as an sbatch job for each. Both modes use partition requeue / 36 cores /
+# 140G RAM / 1 h time limit.
 #
-# Verwendet ausschließlich relative Pfade und muss daher aus diesem Ordner
-# heraus aufgerufen werden (siehe Usage unten). Nutzer-/deployment-spezifische
-# Werte (Referenz-DB, krakenuniq-Installation, Mail-Adresse) stehen direkt in
-# diesem Skript bzw. in scripts/krakenuniq_pipeline.sh.
+# Uses relative paths only and must therefore be called from this folder
+# (see Usage below). User/deployment-specific values (reference DB,
+# krakenuniq installation) are set in scripts/krakenuniq_pipeline.sh; the
+# mail address is set here (--mail or MAIL_USER).
 #
-# Usage (aus diesem Ordner heraus aufrufen):
+# Usage (call from this folder):
 #   bash run_pipeline.sh [--mail user@uni-muenster.de]
 # =============================================================================
 
@@ -19,9 +20,9 @@ set -euo pipefail
 
 PIPELINE="scripts/krakenuniq_pipeline.sh"
 
-# E-Mail für SLURM-Job-Benachrichtigungen. Standardmäßig leer (keine Mail-
-# Benachrichtigung) -- per `--mail user@uni-muenster.de` oder als
-# Umgebungsvariable setzen.
+# E-mail address for SLURM job notifications. Empty by default (no mail
+# notifications) -- set via `--mail user@uni-muenster.de` or as an
+# environment variable.
 : "${MAIL_USER:=}"
 
 while [[ $# -gt 0 ]]; do
@@ -31,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --mail-user nur an sbatch übergeben, wenn eine Adresse gesetzt ist.
+# Only pass --mail-user to sbatch if an address is set.
 MAIL_ARGS=()
 if [[ -n "$MAIL_USER" ]]; then
     MAIL_ARGS=(--mail-user="$MAIL_USER")
