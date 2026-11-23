@@ -43,9 +43,13 @@ def adjusted_kmers(kmers, dup, kingdom):
 
 
 # ── Category (kingdom) from the taxonomy tree ────────────────────────────────
-# Each hit is assigned to a category via its ancestors in the KrakenUniq
-# taxonomy tree (superkingdom, and kingdom "Fungi" within Eukaryota) -- not
-# via its name.
+# A KrakenUniq report is a taxonomy tree: the indentation of the taxName
+# column nests every taxon below its ancestors, in blocks
+#   root > cellular organisms > Eukaryota (incl. Fungi) / Bacteria / Archaea
+#   root > Viruses
+# Each hit is assigned the category of the block it sits in (via the
+# taxNames of its ancestors) -- not via its own name and not via the rank
+# column.
 VIRUSES = "Viruses"
 BACTERIA = "Bacteria"
 ARCHAEA = "Archaea"
@@ -54,28 +58,25 @@ OTHER_EUKARYOTES = "Parasites and other eukaryotes"
 UNASSIGNED = "Unassigned"
 CATEGORY_ORDER = [VIRUSES, BACTERIA, ARCHAEA, FUNGI, OTHER_EUKARYOTES, UNASSIGNED]
 
-# Top-level ranks: "superkingdom" in the NCBI taxonomy used by the current
-# database; "domain"/"acellular root" in newer NCBI taxonomy releases.
-_TOP_RANKS = {"superkingdom", "domain", "acellular root"}
-_TOP_CATEGORY = {"Viruses": VIRUSES, "Bacteria": BACTERIA, "Archaea": ARCHAEA}
-
 
 def category_from_lineage(lineage):
     """
-    lineage: list of (rank, name) from the root down to the taxon itself.
+    lineage: taxNames from the root down to the taxon itself, as nested by
+    the indentation of the taxName column.
     Returns one of CATEGORY_ORDER:
-      superkingdom Viruses / Bacteria / Archaea -> that category
-      superkingdom Eukaryota -> Fungi if below kingdom "Fungi",
-                                otherwise OTHER_EUKARYOTES
-      no superkingdom ancestor (e.g. "other entries") -> UNASSIGNED
+      below "Eukaryota" -> Fungi if also below "Fungi",
+                           otherwise OTHER_EUKARYOTES
+      below "Bacteria" / "Archaea" / "Viruses" -> that category
+      none of these (e.g. "other entries") -> UNASSIGNED
     """
-    top = next((name for rank, name in lineage if rank in _TOP_RANKS), None)
-    if top in _TOP_CATEGORY:
-        return _TOP_CATEGORY[top]
-    if top == "Eukaryota":
-        if any(rank == "kingdom" and name == "Fungi" for rank, name in lineage):
-            return FUNGI
-        return OTHER_EUKARYOTES
+    if "Eukaryota" in lineage:
+        return FUNGI if "Fungi" in lineage else OTHER_EUKARYOTES
+    if "Bacteria" in lineage:
+        return BACTERIA
+    if "Archaea" in lineage:
+        return ARCHAEA
+    if "Viruses" in lineage:
+        return VIRUSES
     return UNASSIGNED
 
 
@@ -90,8 +91,8 @@ def parse_kraken_rows(text):
     viruses without a genus rank, or nodes above genus level), it falls back
     to the row itself (genus_taxid = own taxID).
 
-    kingdom: category from the ancestors in the taxonomy tree, see
-    category_from_lineage().
+    kingdom: category of the block (Eukaryota/Fungi, Bacteria, Archaea,
+    Viruses) the row is nested in, see category_from_lineage().
 
     Some reports accidentally contain the complete table twice
     (concatenation artefact) -- parsing stops at the second occurrence of
@@ -160,7 +161,7 @@ def parse_kraken_rows(text):
         if genus_taxid is None:
             genus_taxid, genus_name = taxID, name
 
-        lineage = [(anc["rank"], anc["name"]) for anc in stack] + [(rank, name)]
+        lineage = [anc["name"] for anc in stack] + [name]
 
         rows.append(dict(
             pct=pct, reads=reads, taxReads=taxReads, kmers=kmers,
