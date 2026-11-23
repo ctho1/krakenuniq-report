@@ -1280,8 +1280,8 @@ def build_story(sample_name, date, parsed, platform_override=None):
         return s if len(s) <= max_len else s[:max_len - 1] + "…"
 
     meta_cols = [
-        ("SAMPLE",    trunc(sample_name), 70*mm),
-        ("DATE",      date,               26*mm),
+        ("SAMPLE",    trunc(sample_name), 66*mm),
+        ("DATE",      date,               30*mm),   # fits "23 November 2026"
         ("METHOD",    platform,           42*mm),
         ("REFERENCE", f"n = {parsed.get('ref_total', 437)} cases", 32*mm),
     ]
