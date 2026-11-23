@@ -250,13 +250,13 @@ def main():
             if is_big:
                 genus_samples_big[genus_key].add(sample)
                 agg = sample_genus_agg[genus_key]
-                # Kingdom is inferred once per genus/sample, from the first
-                # member encountered -- mirrors group_by_genus() in
+                # Category (kingdom) from the taxonomy tree, taken from the
+                # first member encountered -- mirrors group_by_genus() in
                 # generate_report_v3.py (kingdom=members[0]["kingdom"]), so
                 # the reference distribution and live scoring use the same
                 # adjusted_kmers() basis for a given genus.
                 if agg["kingdom"] is None:
-                    agg["kingdom"] = kraken_tree.infer_kingdom(h["name"])
+                    agg["kingdom"] = h["kingdom"]
                 agg["reads"] += h["taxReads"]
                 agg["kmers"] += h["kmers"]
                 agg["cov"] = max(agg["cov"], h["cov"])

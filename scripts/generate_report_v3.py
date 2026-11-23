@@ -488,9 +488,6 @@ def detect_platform(header_lines):
     return "Nanopore Metagenomics"   # default
 
 
-infer_kingdom = kraken_tree.infer_kingdom
-
-
 def assess(entry):
     name  = entry["name"]
 
@@ -504,7 +501,8 @@ def assess(entry):
     kmers = entry["kmers"]
     dup   = entry["dup"]
     cov   = entry["cov"]
-    kingdom = infer_kingdom(name)
+    # Category from the taxonomy tree (kraken_tree.category_from_lineage()).
+    kingdom = entry["kingdom"]
 
     is_contaminant    = name in LIKELY_CONTAMINANTS
     is_opportunist    = name in OPPORTUNISTIC_FLORA
@@ -513,8 +511,8 @@ def assess(entry):
     t_c = THRESHOLDS["CONVINCING"]
     t_n = THRESHOLDS["NOTABLE"]
     # dup cutoff lifted for viruses (see VIRAL_MAX_DUP comment above).
-    max_dup_c = VIRAL_MAX_DUP if kingdom == "Viruses" else t_c["maxDup"]
-    max_dup_n = VIRAL_MAX_DUP if kingdom == "Viruses" else t_n["maxDup"]
+    max_dup_c = VIRAL_MAX_DUP if kingdom == kraken_tree.VIRUSES else t_c["maxDup"]
+    max_dup_n = VIRAL_MAX_DUP if kingdom == kraken_tree.VIRUSES else t_n["maxDup"]
 
     if (reads >= t_c["minReads"] and kmers >= t_c["minKmers"]
             and dup <= max_dup_c and cov >= t_c["minCov"]):
@@ -1199,7 +1197,7 @@ def select_top_hits(hits):
     # highest priority among the members), so a "contaminated" finding with
     # a genuine pathogen species in the same genus is not excluded.
     eligible = [r for r in rows
-                if (r["kingdom"] == "Viruses" or r["dup"] < TOP_HITS_MAX_DUP)
+                if (r["kingdom"] == kraken_tree.VIRUSES or r["dup"] < TOP_HITS_MAX_DUP)
                 and r["comment"] != "Contaminant"]
 
     # Curated pathogens take precedence over commensals within the forced
@@ -1355,7 +1353,7 @@ def build_story(sample_name, date, parsed, platform_override=None):
     story.append(HR(3*mm, 1*mm))
 
     # ── FINDINGS TABLES ───────────────────────────────────────────────────
-    kingdoms = ["Viruses", "Bacteria", "Fungi", "Parasites"]
+    kingdoms = kraken_tree.CATEGORY_ORDER
     cw = list(COL_W.values())
 
     top_hits, rest_rare, rest_common = select_top_hits(hits)
@@ -1504,7 +1502,7 @@ def build_story(sample_name, date, parsed, platform_override=None):
 
     # Top hits: fixed number (TOP_N_HITS), prioritised by rarity, reliably
     # fills page 1 instead of leaving a lot of white space when there are
-    # few rare hits. Grouped by kingdom (Viruses/Bacteria/Fungi/Parasites),
+    # few rare hits. Grouped by category (kraken_tree.CATEGORY_ORDER),
     # still descending by z-score within each group.
     if top_hits:
         story.append(HR(5*mm, 2.5*mm))
@@ -1577,9 +1575,12 @@ def build_story(sample_name, date, parsed, platform_override=None):
          "Included taxa are combined per genus (taxa without a genus form "
          "their own row): reads and k-mers summed, dup as read-weighted mean, "
          "Cov. as maximum. Grey line: the 3 species/"
-         "strains with the most k-mers (k-mer count in brackets). Rows are "
-         "grouped by kingdom, assigned from keywords in the taxon name (no "
-         "match: Bacteria)."),
+         "strains with the most k-mers (k-mer count in brackets)."),
+        ("Categories",
+         "From the KrakenUniq taxonomy: superkingdom Viruses, Bacteria or "
+         "Archaea; within Eukaryota, kingdom Fungi; all other eukaryotes "
+         "(protozoa, helminths, oomycetes, algae) under \"Parasites and other "
+         "eukaryotes\"."),
         ("Top hits",
          f"Up to {TOP_N_HITS} genera, sorted by z-score. Not eligible: genera "
          f"tagged Contaminant and non-viral genera with dup &ge; "
